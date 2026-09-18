@@ -412,6 +412,17 @@ async def _wait_state(service: WakeGateService, expected: ConversationState) -> 
     raise AssertionError(f"wake gate did not reach {expected.value}: {service.status()}")
 
 
+async def _wait_action_count(dispatcher: FakeDispatcher, expected: int) -> None:
+    deadline = asyncio.get_running_loop().time() + 2
+    while asyncio.get_running_loop().time() < deadline:
+        if len(dispatcher.actions) >= expected:
+            return
+        await asyncio.sleep(0.005)
+    raise AssertionError(
+        f"dispatcher did not receive {expected} actions: {dispatcher.actions}"
+    )
+
+
 async def _install_sound_responder(
     bus: MessageBus,
     trace: list[str],
@@ -1224,6 +1235,7 @@ async def test_new_device_session_recovers_after_a_failed_laughter_gate() -> Non
         assert status["session_id"] == "ws-session-2"
         assert status["round_id"] != old_round
         assert status["failure_code"] is None
+        await _wait_action_count(dispatcher, 2)
         assert len(dispatcher.actions) == 2
     finally:
         await service.shutdown()
