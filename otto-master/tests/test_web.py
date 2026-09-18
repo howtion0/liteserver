@@ -11,6 +11,7 @@ from typing import Any
 import httpx
 
 from otto_master.config import RuntimeSecrets, load_config
+from otto_master.dispatch.commands import DispatchRequestError
 from otto_master.gateways.mqtt_broker import EmbeddedMqttBroker
 from otto_master.gateways.web import EventHub, WebContext, create_app
 from otto_master.message_bus import MessageBus
@@ -60,6 +61,43 @@ class FakeDeviceVerifier:
             "passed": True,
             "checks": [{"name": "state_query", "status": "pass"}],
         }
+
+
+class FakeCommandDispatcher:
+    def __init__(self) -> None:
+        self.commands: dict[str, dict[str, Any]] = {}
+        self.counter = 0
+
+    async def submit_action(self, **values: Any) -> dict[str, Any]:
+        if values["device_id"] == "aabbccddee99":
+            raise DispatchRequestError("device_not_online", "device is not online")
+        return self._create("action", values)
+
+    async def submit_stop(self, **values: Any) -> dict[str, Any]:
+        return self._create("stop", values)
+
+    async def stop_cluster(self, *, source: str = "webui") -> dict[str, Any]:
+        del source
+        return {"requested": 2, "accepted": 2, "items": []}
+
+    async def get_command(self, command_id: str) -> dict[str, Any] | None:
+        return self.commands.get(command_id)
+
+    def _create(self, command_type: str, values: dict[str, Any]) -> dict[str, Any]:
+        self.counter += 1
+        command_id = f"command-{self.counter}"
+        command = {
+            "command_id": command_id,
+            "status": "requested",
+            "terminal": False,
+            "payload": {
+                "command_type": command_type,
+                "device_id": values["device_id"],
+            },
+            "history": [{"status": "requested"}],
+        }
+        self.commands[command_id] = command
+        return command
 
 
 def _free_port() -> int:
@@ -138,6 +176,7 @@ async def _context(config: Any) -> WebContext:
         events=events,
         devices=None,
         verifier=None,
+        dispatcher=None,
         component_status=components,
         started_at=datetime.now(UTC),
         started_monotonic=monotonic(),
@@ -310,6 +349,54 @@ async def test_device_verify_api_uses_protected_verifier_and_returns_404(
         assert verified.json()["checks"][0]["name"] == "state_query"
         assert missing.status_code == 404
         assert missing.json()["error"]["code"] == "device_not_found"
+    finally:
+        await _close_context(context)
+
+
+async def test_command_apis_delegate_to_dispatcher_and_return_persistent_state(
+    tmp_path: Path,
+) -> None:
+    context = await _context(_config(tmp_path))
+    context.dispatcher = FakeCommandDispatcher()
+    app = create_app(context)
+    transport = httpx.ASGITransport(app=app)
+    try:
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            action = await client.post(
+                "/api/v1/commands/action",
+                json={
+                    "device_id": "aabbccddee01",
+                    "action": "swing",
+                    "parameters": {"steps": 2},
+                    "confirmation": True,
+                },
+            )
+            command_id = action.json()["command_id"]
+            stored = await client.get(f"/api/v1/commands/{command_id}")
+            missing = await client.get("/api/v1/commands/missing")
+            stopped = await client.post("/api/v1/devices/aabbccddee01/stop")
+            cluster = await client.post("/api/v1/cluster/stop")
+            unavailable = await client.post(
+                "/api/v1/commands/action",
+                json={
+                    "device_id": "aabbccddee99",
+                    "action": "swing",
+                    "parameters": {},
+                    "confirmation": True,
+                },
+            )
+
+        assert action.status_code == 202
+        assert stored.status_code == 200
+        assert stored.json()["history"] == [{"status": "requested"}]
+        assert missing.status_code == 404
+        assert missing.json()["error"]["code"] == "command_not_found"
+        assert stopped.status_code == 202
+        assert stopped.json()["payload"]["command_type"] == "stop"
+        assert cluster.status_code == 202
+        assert cluster.json()["accepted"] == 2
+        assert unavailable.status_code == 409
+        assert unavailable.json()["error"]["code"] == "device_not_online"
     finally:
         await _close_context(context)
 

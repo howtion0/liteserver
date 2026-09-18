@@ -229,6 +229,16 @@ Config / Logging / MessageBus / Storage
 - 验证报告同时要求Broker/Gateway健康、Session online、实际传输为mqtt、存在心跳及state/actions能力，并记录查询命令ID、延迟与动作数量。
 - 本检查点不允许Browser发送任意Topic/JSON，也不发布动作或stop；因此仍不代表动作闭环或EVA真机通过。
 
+### Phase 4C已实现边界
+
+- Web受保护API只提供结构化device_id、action、parameters和显式confirmation，不接受MQTT Topic或原始JSON。
+- Dispatcher仅对online、mqtt、enabled、能力满足且动作目录/参数合法的设备创建命令；每设备普通动作有界串行，不同设备可并行。
+- Gateway将`device.action.execute.requested`编码为`otto_action`，将`device.stop.execute.requested`编码为`stop`；两者均发往精确单设备down Topic，QoS 0、`retain=false`，外部`id`为持久command ID。
+- SQLite记录`requested → published → accepted → moving → completed`及rejected/timeout/disconnected/failed终态；重启不重放未完成动作。
+- stop中断当前动作、取消尚未执行的同设备动作并优先下发；集群stop拆为每设备独立命令与结果。
+- ACK或完成超时不重发动作，而是标记timeout并排入安全stop；传输断开标记disconnected。
+- 当前证据来自真实内嵌Broker与两个fake客户端；固件2.0.5的MQTT stop、hello/heartbeat和去重缺口未补齐，不声称EVA真机通过。
+
 ## 10. EVA1/EVA2真机验收
 
 已知环境基线：

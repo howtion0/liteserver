@@ -2,7 +2,7 @@
 
 ## 当前版本
 
-版本以 `pyproject.toml` 为准，当前为 `0.4.1`。
+版本以 `pyproject.toml` 为准，当前为 `0.4.2`。
 
 ## Git迭代
 
@@ -12,6 +12,8 @@
 - Phase 4A本轮支线为 `test0.4`，明确从已验收的 `test0.3` 继续；跨平台探针run `35300950492`的macOS/Windows jobs均PASS。
 - Phase 4A最终支线 `test0.4` 已推送，远程哈希为 `3d46780a89f2c1955f673ccfbad349b8f342c941`；最终run `35301297710`的macOS/Windows jobs均PASS。
 - Phase 4B本轮支线为 `test0.5`，从已验收的 `test0.4` 继续；跨平台探针run `35303748098`的macOS/Windows jobs均PASS。
+- Phase 4B最终支线 `test0.5` 已推送，远程哈希为 `8120d6341fc80d35f3ecf68e2320559c10a5604f`；首轮run `35304119667` Windows发生一次性Tests失败，相同正式SHA复验run `35304376265`的macOS/Windows jobs均PASS。
+- Phase 4C本轮支线为 `test0.6`，从已验收的 `test0.5` 继续；当前本地门禁通过，远程矩阵待验收。
 - 此后每个阶段或补充检查点使用下一个 `testN.N` 编号。
 - 支线编号与产品版本分别记录，互不驱动。
 
@@ -23,14 +25,14 @@
 | Phase 1 Runtime与Message Bus | 已完成 |
 | Phase 2 SQLite | 已完成 |
 | Phase 3 Web/OTA/mDNS/Embedded MQTT Broker | 已完成 |
-| Phase 4 MQTT控制/TCP回退/WebSocket兼容 | 进行中；Phase 4A上行与Phase 4B只读双向验证已通过当前门禁 |
+| Phase 4 MQTT控制/TCP回退/WebSocket兼容 | 进行中；Phase 4A-4C已完成fake MQTT上行、查询和动作/stop闭环 |
 | Phase 5 Opus/ASR/TTS | 未开始 |
 | Phase 6 WakeGate | 未开始 |
-| Phase 7 LLM/Dispatcher/动作 | 未开始 |
+| Phase 7 LLM/Dispatcher/动作 | 部分完成；Phase 4C已实现传输无关命令Dispatcher，LLM意图尚未开始 |
 | Phase 8 集群/日志/容错 | 未开始 |
 | Phase 9 Windows打包 | 未开始 |
-| Python业务实现 | Phase 1-3基座及Phase 4A/4B MQTT Session、精确查询与连接验证已实现 |
-| 自动测试 | 53通过；Ruff与mypy strict通过；Phase 4B macOS/Windows探针矩阵通过 |
+| Python业务实现 | Phase 1-3基座及Phase 4A-4C MQTT Session、查询、命令仓库和动作/stop闭环已实现 |
+| 自动测试 | 71通过；Ruff与mypy strict通过；Phase 4C远程矩阵待验收 |
 | 硬件验证 | 未运行 |
 
 ## 已完成
@@ -67,15 +69,20 @@
 - `POST /api/v1/devices/{device_id}/verify`已接入受保护控制面，返回逐步PASS/FAIL、命令ID、延迟、动作数量和失败原因；真实Broker双fake测试验证无跨设备下行。
 - Phase 4B本机通过锁文件、Ruff、mypy strict、53个pytest和前端语法检查；无响应验证按配置超时且pending清零。
 - Phase 4B GitHub Actions探针run `35303748098`：macOS job `105471585473`、Windows job `105471585595`均通过锁定安装、Ruff、mypy、53个测试、PyInstaller构建和Broker可执行文件实跑。
+- Phase 4B最终SHA `8120d6341fc80d35f3ecf68e2320559c10a5604f` 在复验run `35304376265`中双平台通过：macOS job `105473436674`、Windows job `105473436870`。首轮Windows Tests单次失败后，本机连续10轮全量测试与同SHA复验均无复现。
+- Phase 4C已实现SQLite命令仓库和schema v3索引：原子创建、合法转移、全历史查询、重复ID幂等/冲突拒绝，以及重启将未完成命令标记disconnected而不重放。
+- Phase 4C已实现每设备有界串行Dispatcher、跨设备并行、stop抢占与待执行取消、集群stop拆分、乱序事实缓冲、ACK/完成超时安全stop和断线终态。
+- Phase 4C已将受保护action/stop/cluster-stop和命令查询API接入Runtime；动作必须online、mqtt、能力/目录/参数合法且显式确认。Browser仍不能提供Topic或原始MQTT JSON。
+- Phase 4C真实Broker双fake测试验证EVA1精确执行`otto_action → stop`、完整持久状态链、QoS 0/non-retain、EVA2无串线与相同command ID只下发一次；本机71个测试通过。
 
 ## 进行中
 
-- Phase 4B本地与跨平台探针验收已通过；等待`test0.5`最终提交/push及精确SHA的正式矩阵核对。
-- 完整Phase 4尚未完成：没有动作/stop生命周期、命令仓库/队列、TCP回退、Xiaozhi WebSocket、固件hello/heartbeat/stop/去重或EVA真机结果。
+- Phase 4C本地验收已通过；等待`test0.6`跨平台探针、最终提交/push及精确SHA矩阵核对。
+- 完整Phase 4尚未完成：没有TCP回退、Xiaozhi WebSocket、固件hello/heartbeat/stop/去重、Broker重启后真设备恢复或EVA1/EVA2真机MQTT结果。
 
 ## 下一步
 
-完成`test0.5`远程门禁后建立下一检查点：实现动作/stop命令仓库、每设备有序队列和`requested → published → accepted → moving → completed` fake闭环，再进入兼容传输和EVA真机安全验收。
+完成`test0.6`远程门禁后建立下一检查点：实现TCP `otto-master/1`诊断回退与Xiaozhi WebSocket兼容传输，让它们生成与MQTT一致的内部Message和命令生命周期，再进入固件与EVA真机安全验收。
 
 ## 已知风险
 
@@ -85,4 +92,4 @@
 - ESP32云端唤醒需要固件在休眠时通过VAD触发音频上传，服务端完成后仍需配套固件改造。
 - 固件2.0.5的MQTT入口缺少stop、独立hello/heartbeat和命令ID去重；Phase 4必须补齐后再启用QoS 1。
 - Windows真实局域网mDNS、防火墙提示和完整应用打包仍留给Phase 9实体Windows环境；本轮Windows CI已覆盖aMQTT认证/ACL、Runtime网络集成和Broker PyInstaller可执行文件。
-- fake设备双向只读验证已实现；动作accepted/moving/completed关联、Broker重启后设备自动恢复、真机固件能力和安全动作仍属于后续Phase 4检查点。
+- fake设备accepted/moving/completed、stop与超时安全收尾已实现；Broker重启后设备自动恢复、固件命令ID去重、真机stop和安全动作仍属于后续Phase 4检查点。

@@ -25,6 +25,12 @@ mqtt:
   gateway_reconnect_seconds: 2
   query_timeout_seconds: 3
 
+dispatch:
+  queue_size_per_device: 16
+  ack_timeout_seconds: 3
+  completion_timeout_seconds: 15
+  state_query_interval_seconds: 1
+
 runtime:
   message_queue_size: 1024
   worker_threads: 4

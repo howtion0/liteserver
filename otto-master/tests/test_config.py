@@ -23,6 +23,10 @@ def test_repository_config_loads_without_exposing_secret_values() -> None:
     assert config.mqtt.heartbeat_stale_seconds == 15
     assert config.mqtt.heartbeat_offline_seconds == 30
     assert config.mqtt.query_timeout_seconds == 3
+    assert config.dispatch.queue_size_per_device == 16
+    assert config.dispatch.ack_timeout_seconds == 3
+    assert config.dispatch.completion_timeout_seconds == 15
+    assert config.dispatch.state_query_interval_seconds == 1
     assert config.secrets.console_token == "console-super-secret"
     assert config.secrets.mqtt_master_password == "mqtt-super-secret"
     assert config.secrets.provisioning_token == "provision-super-secret"

@@ -41,6 +41,20 @@
 
 ## 最近记录
 
+### 2026-09-18 / Phase 4C / MQTT动作、stop与持久命令生命周期
+
+- 版本：`0.4.2`
+- Git迭代：`test0.6`，基线为已推送的 `test0.5` / `8120d6341fc80d35f3ecf68e2320559c10a5604f`
+- 目标：仅在fake设备上完成受保护Web API→Message Bus→Dispatcher→MQTT Gateway→精确单设备down Topic→ACK/state→SQLite的动作和stop闭环。
+- 修改：新增命令状态合同与持久仓库，schema升至v3；实现每设备有界worker、跨设备并行、stop抢占/取消、集群stop拆分、乱序事实缓冲、状态查询轮询、超时安全stop与重启失败关闭；接入action/stop/cluster-stop/命令查询API。
+- 协议：Gateway只接受`device.action.execute.requested|device.stop.execute.requested`，外部ID等于command ID，精确down Topic、QoS 0、`retain=false`；ACK只标记accepted，动作必须再观测moving和idle才completed。
+- 安全：动作要求online/mqtt/enabled、actions能力、动作目录、参数Schema和显式confirmation；Browser无任意Topic/JSON入口；队列满、冲突ID、断线和超时都失败关闭，动作不自动重发。
+- 本机验证：锁文件、Ruff、mypy strict和前端JS语法PASS；`pytest -q` 71 PASS。Dispatcher用例覆盖串行、并行、乱序、有界队列、stop抢占、ACK/idle超时、断线与集群stop。真实Broker双fake用例完成EVA1 `otto_action → stop`，EVA2无串线，重复command ID只下发一次，关闭后命令终态仍可查询。
+- 返工：扩展真Broker用例后，原0.5秒心跳stale阈值在新增动作链后正确触发，改为用例内显式刷新心跳与稳定测试阈值；Pydantic不支持当前隐式递归`JsonValue`生成Schema，恢复API边界`Any`并在Message合同层完成严格复制/拒绝；额外封堵归一化参数名覆盖保留字段。
+- 未运行：EVA1/EVA2真机、固件改造、TCP回退、Xiaozhi WebSocket、QoS 1、云服务和实体Windows局域网。
+- 状态：Phase 4C本地门禁PASS；等待macOS/Windows探针、`test0.6`最终push和正式SHA矩阵。
+- 下一步：实现TCP `otto-master/1`回退与Xiaozhi WebSocket兼容传输，复用同一Dispatcher和命令生命周期。
+
 ### 2026-09-18 / Phase 4B / MQTT只读下行与连接验证
 
 - 版本：`0.4.1`
@@ -50,9 +64,10 @@
 - 安全：浏览器不能提供Topic或原始MQTT JSON；仅允许`otto_query`与`otto_actions`；响应必须同时匹配ID、内部topic和device target；本轮不发送action/stop。
 - 本机验证：`uv lock --check`、Ruff、mypy、前端JS语法均PASS；`pytest -q` 53 PASS。真实Broker中验证EVA1 fake只触达自己的down Topic，两个命令均QoS 0/non-retain，EVA2无串线；EVA2无响应路径按0.2秒失败且pending为0。
 - 远程验证：GitHub Actions探针run `35303748098`中macOS job `105471585473`、Windows job `105471585595`均success；两边均完成锁定安装、Ruff、mypy、53个pytest、PyInstaller构建和Broker可执行文件实跑。
+- 最终验收：`test0.5` / `8120d6341fc80d35f3ecf68e2320559c10a5604f` 已推送且远程哈希一致。首轮run `35304119667` macOS success、Windows Tests单次failure；本机连续10轮全量测试无复现，相同SHA复验run `35304376265`的macOS job `105473436674`和Windows job `105473436870`均success。
 - 返工：首次mypy发现可选响应和动作列表未被布尔别名正确收窄，改为显式`is None`/`isinstance`后类型检查与回归通过；补充错误target和错误ID均不能完成请求。
 - 未运行：EVA1/EVA2真机、动作/stop、命令队列、固件改造、TCP/WebSocket兼容、云服务和实体Windows局域网。
-- 状态：Phase 4B本地与macOS/Windows探针门禁PASS；完整Phase 4仍进行中，等待`test0.5`最终push、远程哈希和正式CI核对。
+- 状态：Phase 4B本地、跨平台探针、最终push/哈希与正式SHA复验全部PASS；完整Phase 4仍进行中。
 - 下一步：实现持久命令仓库、每设备有序动作/stop及fake设备完整状态生命周期。
 
 ### 2026-09-18 / Phase 4A / MQTT假设备只读联调端

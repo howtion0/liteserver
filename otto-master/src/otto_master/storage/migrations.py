@@ -122,9 +122,20 @@ CREATE TABLE IF NOT EXISTS device_actions (
 """
 
 
+_MIGRATION_3 = """
+CREATE INDEX IF NOT EXISTS idx_commands_status_updated_at
+    ON commands (status, updated_at);
+CREATE INDEX IF NOT EXISTS idx_commands_target_created_at
+    ON commands (target, created_at);
+CREATE INDEX IF NOT EXISTS idx_command_results_command_created_at
+    ON command_results (command_id, created_at);
+"""
+
+
 MIGRATIONS: tuple[Migration, ...] = (
     Migration(version=1, sql=_MIGRATION_1),
     Migration(version=2, sql=_MIGRATION_2),
+    Migration(version=3, sql=_MIGRATION_3),
 )
 SCHEMA_VERSION = MIGRATIONS[-1].version
 

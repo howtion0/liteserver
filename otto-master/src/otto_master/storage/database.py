@@ -10,6 +10,7 @@ from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 import aiosqlite
 
@@ -427,6 +428,192 @@ class Database:
             actions.append(decoded)
         return actions
 
+    async def create_command_record(
+        self,
+        *,
+        command_id: str,
+        correlation_id: str | None,
+        topic: str,
+        target: str,
+        status: str,
+        payload: Mapping[str, JsonValue],
+        result_payload: Mapping[str, JsonValue] | None = None,
+    ) -> bool:
+        """Atomically create a command and its first lifecycle result.
+
+        Returns ``False`` when the command ID already exists. Callers must then
+        compare the existing immutable request before treating it as an
+        idempotent duplicate.
+        """
+
+        if not command_id.strip() or not topic.strip() or not target.strip() or not status.strip():
+            raise ValueError("command identity, topic, target and status must not be empty")
+        now = _now()
+        payload_json = _json(sanitize_payload(payload))
+        result_json = _json(sanitize_payload(result_payload or {}))
+        async with self._operation_lock:
+            connection = self._require_connection()
+            cursor = await connection.execute(
+                """
+                INSERT OR IGNORE INTO commands (
+                    command_id, correlation_id, topic, target, status,
+                    payload_json, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    command_id,
+                    correlation_id,
+                    topic,
+                    target,
+                    status,
+                    payload_json,
+                    now,
+                    now,
+                ),
+            )
+            inserted = cursor.rowcount == 1
+            await cursor.close()
+            if inserted:
+                await connection.execute(
+                    """
+                    INSERT INTO command_results (
+                        result_id, command_id, correlation_id, status,
+                        error, payload_json, created_at
+                    ) VALUES (?, ?, ?, ?, NULL, ?, ?)
+                    """,
+                    (
+                        str(uuid4()),
+                        command_id,
+                        correlation_id,
+                        status,
+                        result_json,
+                        now,
+                    ),
+                )
+            await connection.commit()
+            return inserted
+
+    async def transition_command_record(
+        self,
+        *,
+        command_id: str,
+        expected_status: str,
+        status: str,
+        error: str | None = None,
+        payload: Mapping[str, JsonValue] | None = None,
+    ) -> bool:
+        """Conditionally update one command and append matching history."""
+
+        now = _now()
+        payload_json = _json(sanitize_payload(payload or {}))
+        async with self._operation_lock:
+            connection = self._require_connection()
+            cursor = await connection.execute(
+                """
+                UPDATE commands
+                SET status = ?, updated_at = ?
+                WHERE command_id = ? AND status = ?
+                """,
+                (status, now, command_id, expected_status),
+            )
+            changed = cursor.rowcount == 1
+            await cursor.close()
+            if not changed:
+                await connection.rollback()
+                return False
+            await connection.execute(
+                """
+                INSERT INTO command_results (
+                    result_id, command_id, correlation_id, status,
+                    error, payload_json, created_at
+                )
+                SELECT ?, command_id, correlation_id, ?, ?, ?, ?
+                FROM commands
+                WHERE command_id = ?
+                """,
+                (
+                    str(uuid4()),
+                    status,
+                    error,
+                    payload_json,
+                    now,
+                    command_id,
+                ),
+            )
+            await connection.commit()
+            return True
+
+    async def fetch_command_record(self, command_id: str) -> dict[str, Any] | None:
+        async with self._operation_lock:
+            connection = self._require_connection()
+            cursor = await connection.execute(
+                "SELECT * FROM commands WHERE command_id = ?",
+                (command_id,),
+            )
+            try:
+                row = await cursor.fetchone()
+            finally:
+                await cursor.close()
+        return self._command_row(row) if row is not None else None
+
+    async def fetch_command_results(self, command_id: str) -> list[dict[str, Any]]:
+        async with self._operation_lock:
+            connection = self._require_connection()
+            cursor = await connection.execute(
+                """
+                SELECT result_id, command_id, correlation_id, status,
+                       error, payload_json, created_at
+                FROM command_results
+                WHERE command_id = ?
+                ORDER BY rowid ASC
+                """,
+                (command_id,),
+            )
+            try:
+                rows = await cursor.fetchall()
+            finally:
+                await cursor.close()
+        results: list[dict[str, Any]] = []
+        for row in rows:
+            result = dict(row)
+            result["payload"] = json.loads(str(result.pop("payload_json")))
+            results.append(result)
+        return results
+
+    async def list_command_records(
+        self,
+        *,
+        statuses: Sequence[str] | None = None,
+        limit: int = 500,
+    ) -> list[dict[str, Any]]:
+        if not 1 <= limit <= 1000:
+            raise ValueError("limit must be between 1 and 1000")
+        parameters: list[Any] = []
+        where = ""
+        if statuses is not None:
+            normalized = tuple(statuses)
+            if not normalized:
+                return []
+            where = f"WHERE status IN ({','.join('?' for _ in normalized)})"
+            parameters.extend(normalized)
+        parameters.append(limit)
+        async with self._operation_lock:
+            connection = self._require_connection()
+            cursor = await connection.execute(
+                f"""
+                SELECT * FROM commands
+                {where}
+                ORDER BY created_at ASC, command_id ASC
+                LIMIT ?
+                """,
+                parameters,
+            )
+            try:
+                rows = await cursor.fetchall()
+            finally:
+                await cursor.close()
+        return [self._command_row(row) for row in rows]
+
     async def mark_active_devices_offline(self) -> int:
         now = _now()
         async with self._operation_lock:
@@ -481,6 +668,12 @@ class Database:
         result = dict(row)
         result["capabilities"] = json.loads(str(result.pop("capabilities_json")))
         result["enabled"] = bool(result["enabled"])
+        return result
+
+    @staticmethod
+    def _command_row(row: aiosqlite.Row) -> dict[str, Any]:
+        result = dict(row)
+        result["payload"] = json.loads(str(result.pop("payload_json")))
         return result
 
     async def _count_rows(self, table: str) -> int:
