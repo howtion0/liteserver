@@ -67,7 +67,7 @@ jobs:
         run: uv run mypy src
 
       - name: Tests
-        run: uv run pytest -q
+        run: uv run python tests/packaging/run_pytest_ci.py
 
       - name: Build embedded broker smoke executable
         run: >-
