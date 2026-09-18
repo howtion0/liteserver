@@ -2,7 +2,7 @@
 
 ## 当前版本
 
-版本以 `pyproject.toml` 为准，当前为 `0.4.2`。
+版本以 `pyproject.toml` 为准，当前为 `0.4.3`。
 
 ## Git迭代
 
@@ -13,7 +13,8 @@
 - Phase 4A最终支线 `test0.4` 已推送，远程哈希为 `3d46780a89f2c1955f673ccfbad349b8f342c941`；最终run `35301297710`的macOS/Windows jobs均PASS。
 - Phase 4B本轮支线为 `test0.5`，从已验收的 `test0.4` 继续；跨平台探针run `35303748098`的macOS/Windows jobs均PASS。
 - Phase 4B最终支线 `test0.5` 已推送，远程哈希为 `8120d6341fc80d35f3ecf68e2320559c10a5604f`；首轮run `35304119667` Windows发生一次性Tests失败，相同正式SHA复验run `35304376265`的macOS/Windows jobs均PASS。
-- Phase 4C本轮支线为 `test0.6`，从已验收的 `test0.5` 继续；本地门禁和跨平台探针run `35306214077`均通过，正式SHA待复验。
+- Phase 4C最终支线 `test0.6` 已推送，远程哈希为 `f359a1fc3a50360fbcb2de42cced2f48eeb6c164`；探针run `35306214077`和正式run `35306518034`的macOS/Windows jobs均PASS。
+- Phase 4D本轮支线为 `test0.7`，从已验收的 `test0.6` 继续；本地80个测试及全部质量门已通过，跨平台探针结果在本轮Session Contract记录。
 - 此后每个阶段或补充检查点使用下一个 `testN.N` 编号。
 - 支线编号与产品版本分别记录，互不驱动。
 
@@ -25,14 +26,14 @@
 | Phase 1 Runtime与Message Bus | 已完成 |
 | Phase 2 SQLite | 已完成 |
 | Phase 3 Web/OTA/mDNS/Embedded MQTT Broker | 已完成 |
-| Phase 4 MQTT控制/TCP回退/WebSocket兼容 | 进行中；Phase 4A-4C已完成fake MQTT上行、查询和动作/stop闭环 |
-| Phase 5 Opus/ASR/TTS | 未开始 |
+| Phase 4 MQTT控制/TCP回退/WebSocket兼容 | 进行中；Phase 4A-4D已完成fake MQTT/TCP/WebSocket上行、查询和动作/stop闭环，固件与真机待验收 |
+| Phase 5 Opus/ASR/TTS | 未开始；火山Provider、协议和独立云API烟测已完成，Otto Master代码与真机链路未实现 |
 | Phase 6 WakeGate | 未开始 |
 | Phase 7 LLM/Dispatcher/动作 | 部分完成；Phase 4C已实现传输无关命令Dispatcher，LLM意图尚未开始 |
 | Phase 8 集群/日志/容错 | 未开始 |
 | Phase 9 Windows打包 | 未开始 |
-| Python业务实现 | Phase 1-3基座及Phase 4A-4C MQTT Session、查询、命令仓库和动作/stop闭环已实现 |
-| 自动测试 | 71通过；Ruff与mypy strict通过；Phase 4C macOS/Windows探针通过 |
+| Python业务实现 | Phase 1-3基座及Phase 4A-4D多传输Session、查询、命令仓库和动作/stop闭环已实现 |
+| 自动测试 | 80通过；Ruff与mypy strict通过；Phase 4D跨平台结果见本轮Session Contract |
 | 硬件验证 | 未运行 |
 
 ## 已完成
@@ -45,6 +46,8 @@
 - 将“Event Bus”统一为“Message Bus”。
 - 明确macOS开发、Windows部署和单Python进程边界。
 - LLM Provider已选定为DeepSeek官方OpenAI兼容接口；密钥仍只从本地环境变量读取。
+- ASR/TTS Provider已选定为火山引擎豆包语音：ASR 1.0时长版双向WebSocket与TTS 2.0流式HTTP已完成独立真实API烟测；Phase 5实现、设备链路和跨平台验收仍未开始。
+- TTS烟测得到24 kHz单声道PCM并用`opuslib-next`编码为93个60 ms Opus帧，首帧解码通过；ASR对同一音频返回精确最终文本。详细证据和接入合同见`docs/VOLCENGINE_SPEECH_INTEGRATION.md`。
 - 已将MQTT确定为目标集群控制通道：同一Python进程内嵌Broker，TCP作为迁移回退，WebSocket保留兼容。
 - 已记录用户提供的固件 `2.0.5` 真机基线：EVA1/EVA2同网段在线、各14动作、`swing`与`stop`后回到idle；该结果来自当前TCP控制链路，不计为MQTT验收通过。
 - 已冻结打包前Server控制台P0需求：系统与Broker健康、设备接入、只读连接验证、安全动作验证、命令生命周期、事件恢复、安全、OTA和Windows冒烟标准。
@@ -75,22 +78,30 @@
 - Phase 4C已将受保护action/stop/cluster-stop和命令查询API接入Runtime；动作必须online、mqtt、能力/目录/参数合法且显式确认。Browser仍不能提供Topic或原始MQTT JSON。
 - Phase 4C真实Broker双fake测试验证EVA1精确执行`otto_action → stop`、完整持久状态链、QoS 0/non-retain、EVA2无串线与相同command ID只下发一次；本机71个测试通过。
 - Phase 4C跨平台探针run `35306214077`通过：Windows job `105478815027`、macOS job `105478815315`均success，包含锁定安装、静态检查、71个测试、PyInstaller构建和Broker可执行文件实跑。
+- Phase 4C最终SHA `f359a1fc3a50360fbcb2de42cced2f48eeb6c164` 已推送且与`origin/test0.6`一致；正式run `35306518034`的Windows job `105479722338`、macOS job `105479722462`均success。
+- Phase 4D已抽取MQTT/TCP/WebSocket共享设备协议翻译器，三种Gateway只发送与命令`transport`一致的下行；Device Session记录`available_transports`并按`mqtt → websocket → tcp`选择首选传输，非首选状态/目录不能污染当前快照。
+- Phase 4D已实现认证的TCP `otto-master/1`换行JSON Gateway：首帧MAC/token/client_id交叉验证、64 KiB边界、同设备新连接替换、查询、动作、stop、断线和Gateway不可用事实均通过真实loopback Socket测试。
+- Phase 4D已实现Xiaozhi WebSocket v1：Bearer与设备身份认证、官方hello/listen/abort、Otto文本扩展和raw Opus二进制分流。每个listen建立`utterance_id`，Message只携带`frame_ref`与序号，原始音频只留在每设备有界内存并在断开时清理。
+- Phase 4D已让Verifier和Dispatcher锁定所选传输；错误传输响应不能完成查询，在途动作遇到传输切换进入`disconnected`，不会跨传输重放。TCP与WebSocket fake设备分别完成动作及stop的完整持久生命周期。
+- Phase 4D本机通过`uv lock --check`、Ruff、mypy strict（34个源码文件）、80个pytest、前端JS语法和`git diff --check`；真实HTTP/WebSocket、TCP与内嵌MQTT在同一Runtime并存并释放端口。
 
 ## 进行中
 
-- Phase 4C本地验收与跨平台探针已通过；等待`test0.6`最终提交/push及精确SHA矩阵核对。
-- 完整Phase 4尚未完成：没有TCP回退、Xiaozhi WebSocket、固件hello/heartbeat/stop/去重、Broker重启后真设备恢复或EVA1/EVA2真机MQTT结果。
+- Phase 4D本地门禁已通过；`test0.7`跨平台探针、唯一验收提交、push和正式SHA核对按本轮Session Contract收尾。
+- 完整Phase 4尚未完成：固件hello/heartbeat/stop/命令ID去重、Broker重启后真设备恢复和EVA1/EVA2真机MQTT结果仍未验收。
 
 ## 下一步
 
-完成`test0.6`远程门禁后建立下一检查点：实现TCP `otto-master/1`诊断回退与Xiaozhi WebSocket兼容传输，让它们生成与MQTT一致的内部Message和命令生命周期，再进入固件与EVA真机安全验收。
+完成`test0.7`远程门禁后按用户要求暂停，不自动创建下一支线或开始Phase 5。恢复施工时，应先重新核对GitHub基线，再由用户确定进入固件/EVA真机验收还是按`docs/VOLCENGINE_SPEECH_INTEGRATION.md`开展Phase 5。
 
 ## 已知风险
 
 - Python Opus库在Windows打包时可能需要额外动态库收集，留到Phase 5和Phase 9验证。
-- 云ASR/TTS供应商尚未选定，适配接口必须避免绑定厂商类型。
+- 火山ASR/TTS协议已独立烟测，但Otto Master适配器、音频背压、EVA真机和Windows `libopus` 打包尚未验证；Provider字段仍须通过Gateway隔离，不能泄漏到领域合同。
+- 当前账号的ASR 2.0资源请求返回403，Phase 5先使用已验证的ASR 1.0时长版；2.0开通前不得自动切换或把403误报为密钥整体失效。
 - DeepSeek模型名称来自当前官方配置；实现阶段仍需用新密钥完成一次真实连通测试。
 - ESP32云端唤醒需要固件在休眠时通过VAD触发音频上传，服务端完成后仍需配套固件改造。
 - 固件2.0.5的MQTT入口缺少stop、独立hello/heartbeat和命令ID去重；Phase 4必须补齐后再启用QoS 1。
 - Windows真实局域网mDNS、防火墙提示和完整应用打包仍留给Phase 9实体Windows环境；本轮Windows CI已覆盖aMQTT认证/ACL、Runtime网络集成和Broker PyInstaller可执行文件。
 - fake设备accepted/moving/completed、stop与超时安全收尾已实现；Broker重启后设备自动恢复、固件命令ID去重、真机stop和安全动作仍属于后续Phase 4检查点。
+- TCP和设备WebSocket当前是无TLS的局域网兼容入口，不得直接暴露到互联网或不可信网络；生产化前需要TLS终止、证书校验和对应威胁模型。

@@ -49,14 +49,14 @@ mDNS / OTA     ───┘                                  ├─ WakeGate
 | Phase 1 Runtime与Message Bus | 已完成 |
 | Phase 2 SQLite | 已完成 |
 | Phase 3 网络控制面 | 已完成；macOS/Windows CI与两平台PyInstaller smoke通过 |
-| Phase 4 MQTT与Device Session | 进行中；Phase 4C fake设备动作/stop闭环本地与跨平台探针通过，正式SHA待复验 |
-| Python业务代码 | Phase 1-4C已实现；TCP/WebSocket兼容、固件和云服务未接入 |
+| Phase 4 MQTT与Device Session | 进行中；Phase 4A-4D已完成fake MQTT/TCP/WebSocket控制链，固件与EVA真机待验收 |
+| Python业务代码 | Phase 1-4D已实现；固件改造和云服务未接入 |
 | WebUI | P0状态/实时设备/事件/设置/OTA骨架已实现 |
 | SQLite数据库 | 运行时自动创建并迁移 |
 | 固件文件 | 未放入 |
-| 测试 | 本机71个自动测试通过；Phase 4C macOS/Windows探针通过，正式SHA待复验 |
+| 测试 | 本机80个自动测试通过；Phase 4D跨平台结果以本轮Session Contract和GitHub Actions为准 |
 
-当前工程可启动本地控制面、Broker、MQTT Gateway、Device Manager和Dispatcher，并对fake/兼容设备执行只读连接验证、受保护动作/stop、命令状态查询和集群stop拆分。这些结果只来自fake设备；固件2.0.5的MQTT stop/去重改造与EVA真机验收尚未完成。
+当前工程可同时启动本地控制面、Broker、MQTT Gateway、TCP Gateway、设备WebSocket、Device Manager和Dispatcher，并对fake/兼容设备执行只读连接验证、受保护动作/stop、命令状态查询和集群stop拆分。WebSocket v1音频帧只保存在有界短期内存并以引用传递。这些结果只来自fake设备和loopback网络；固件2.0.5的MQTT stop/去重改造与EVA真机验收尚未完成。
 
 ## 5. 文档索引
 
@@ -73,7 +73,9 @@ mDNS / OTA     ───┘                                  ├─ WakeGate
 | 模块状态 | `docs/MODULE_STATUS.md` |
 | 施工记录 | `docs/LOG.md` |
 | 消息格式和主题 | `docs/MESSAGE_CONTRACTS.md` |
+| MQTT、TCP与设备WebSocket传输合同 | `docs/DEVICE_TRANSPORT_CONTRACT.md` |
 | MQTT控制、迁移和EVA真机验收 | `docs/MQTT_CONTROL_CONTRACT.md` |
+| Phase 5火山ASR/TTS、Opus数据流和复用边界 | `docs/VOLCENGINE_SPEECH_INTEGRATION.md` |
 | Server控制台与打包前验收 | `docs/SERVER_CONSOLE_REQUIREMENTS.md` |
 | 调试路线 | `docs/DEBUG_GUIDE.md` |
 
@@ -91,7 +93,7 @@ source .venv/bin/activate
 python -m pip install -e '.[dev]'
 ```
 
-当前可使用 `uv run --project . --extra dev ...` 执行 Phase 1 的测试和静态检查；后续阶段继续沿用 Python 3.11+ 环境。
+当前可使用 `uv run --project . --extra dev ...` 执行全量测试和静态检查；后续阶段继续沿用 Python 3.11+ 环境。
 
 ## 7. 每次施工前
 

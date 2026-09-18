@@ -77,6 +77,10 @@ class CommandDispatchReader(Protocol):
     async def get_command(self, command_id: str) -> dict[str, Any] | None: ...
 
 
+class DeviceWebsocketHandler(Protocol):
+    async def handle(self, websocket: WebSocket) -> None: ...
+
+
 def _now() -> str:
     return datetime.now(UTC).isoformat().replace("+00:00", "Z")
 
@@ -326,6 +330,7 @@ class WebContext:
     component_status: ComponentStatusProvider
     started_at: datetime
     started_monotonic: float
+    device_websocket: DeviceWebsocketHandler | None = None
 
 
 def _correlation_id(request: Request) -> str:
@@ -725,6 +730,21 @@ def create_app(context: WebContext) -> FastAPI:
                 "publish_topic_template": "otto/v1/devices/{device_id}/up",
                 "subscribe_topic_template": "otto/v1/devices/{device_id}/down",
             },
+            "tcp": {
+                "enabled": context.config.tcp.enabled,
+                "endpoint": f"tcp://{context.config.discovery.hostname}:{context.config.tcp.port}",
+                "protocol": "otto-master/1",
+                "authentication": "per-device-token",
+            },
+            "websocket": {
+                "enabled": context.config.device_websocket.enabled,
+                "endpoint": (
+                    f"ws://{context.config.discovery.hostname}:{context.config.server.port}"
+                    f"{context.config.server.websocket_path}"
+                ),
+                "protocol": "xiaozhi-websocket-v1",
+                "authentication": "bearer-device-token",
+            },
         }
 
     @app.post("/api/v1/ota/provision")
@@ -748,11 +768,37 @@ def create_app(context: WebContext) -> FastAPI:
                     "publish_topic": provisioned.publish_topic,
                     "subscribe_topic": provisioned.subscribe_topic,
                 },
+                "tcp": {
+                    "enabled": context.config.tcp.enabled,
+                    "endpoint": (
+                        f"tcp://{context.config.discovery.hostname}:{context.config.tcp.port}"
+                    ),
+                    "protocol": "otto-master/1",
+                    "client_id": provisioned.client_id,
+                    "token": provisioned.password,
+                },
+                "websocket": {
+                    "enabled": context.config.device_websocket.enabled,
+                    "endpoint": (
+                        f"ws://{context.config.discovery.hostname}:{context.config.server.port}"
+                        f"{context.config.server.websocket_path}"
+                    ),
+                    "protocol_version": 1,
+                    "client_id": provisioned.client_id,
+                    "token": provisioned.password,
+                },
                 "firmware": await firmware.status(),
             }
         )
         response.headers["Cache-Control"] = "no-store"
         return response
+
+    @app.websocket(context.config.server.websocket_path)
+    async def device_websocket(websocket: WebSocket) -> None:
+        if context.device_websocket is None:
+            await websocket.close(code=1013, reason="device websocket unavailable")
+            return
+        await context.device_websocket.handle(websocket)
 
     @app.websocket("/api/v1/events/stream")
     async def event_stream(websocket: WebSocket) -> None:

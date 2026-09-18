@@ -11,6 +11,8 @@
 - `master.local:8765` 原生TCP在迁移期作为诊断与安全回退通道，等MQTT真机验收全部通过后再决定是否默认关闭。
 - 内部 `MessageBus` 与 MQTT Broker 是两层不同的总线：前者负责进程内领域消息，后者只负责设备网络传输。
 
+Phase 5语音链继续遵守这条边界：MQTT只承载TTS/listen等JSON信令，连续Opus仍走加密UDP；内部Message Bus只发布音频元数据和短期 `frame_ref`。三传输共同的身份、选择和命令路由见 `docs/DEVICE_TRANSPORT_CONTRACT.md`；火山ASR/TTS、PCM/Opus转换和完整数据流见 `docs/VOLCENGINE_SPEECH_INTEGRATION.md`。
+
 ## 2. 固件2.0.5已知能力与缺口
 
 ### 已有能力

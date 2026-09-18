@@ -162,7 +162,8 @@ Phase 4A检查点（`test0.4`）只完成不移动设备的上行联调端：
 - [x] 两个fake设备通过受保护OTA和真实Broker同时联调且无动作下行
 - [x] Phase 4B精确down状态/动作目录查询、correlation、超时与只读验证报告
 - [x] Phase 4C fake设备MQTT动作、stop、持久命令历史与完整生命周期
-- [ ] TCP回退、Xiaozhi WebSocket、固件改造与EVA1/EVA2真机验收
+- [x] Phase 4D认证TCP回退、Xiaozhi WebSocket v1、fake多传输隔离与动作/stop闭环
+- [ ] 固件MQTT改造、Broker恢复与EVA1/EVA2真机验收
 
 验收：
 
@@ -185,21 +186,32 @@ Phase 4A检查点（`test0.4`）只完成不移动设备的上行联调端：
 
 目标：打通语音上行和语音回传，不接LLM动作。
 
+Provider和协议已经通过独立烟测冻结，完整设计、数据流、实测证据和复用边界见 `docs/VOLCENGINE_SPEECH_INTEGRATION.md`。烟测通过只证明云协议可行，不表示Phase 5已经开始或完成。
+
 实现：
 
-1. Opus/PCM转换和音频参数校验。
-2. 云ASR适配器和fake provider。
-3. 云TTS适配器和fake provider。
-4. TTS start/audio/stop序列。
-5. MQTT Profile使用加密UDP Opus，WebSocket Profile使用二进制Opus。
-6. 以 `tts stop` 后设备重新进入listening作为当前播放完成信号；显式 `tts_finished` 仅在固件以后增加时使用。
+1. 在 `audio/opus.py` 实现16/24 kHz、单声道、60 ms帧的Opus/PCM转换、跨块滚动缓冲、尾帧补齐和参数校验。
+2. 按 `device_id + utterance_id` 建立有界、短生命周期音频数据面；Message Bus只传元数据和 `frame_ref`，不传或持久化原始音频。
+3. 在 `gateways/cloud.py` 接入火山当前API Key鉴权、ASR二进制WebSocket协议和TTS流式HTTP，并把Provider错误转换为稳定内部错误。
+4. 在 `services/asr.py` 实现火山ASR 1.0时长版适配器和fake provider；输入为16 kHz PCM，输出partial/final/failed规范消息。
+5. 在 `services/tts.py` 实现火山TTS 2.0适配器和fake provider；直接请求24 kHz PCM，再编码为60 ms Opus，避免MP3和FFmpeg转码链。
+6. 严格实现 `tts start → sentence_start → Opus frames → stop`；start后任何失败、断开或取消都在清理路径尝试stop。
+7. MQTT Profile使用现有加密UDP Opus，WebSocket Profile使用二进制Opus；两者共享相同内部音频和TTS状态合同。
+8. 以 `tts stop` 后设备重新进入listening作为当前播放完成信号；显式 `tts_finished` 仅在固件以后增加时使用。
+9. 复用小智Server的连接生命周期、PCM滚动缓冲、60 ms节奏和TTS状态顺序；火山鉴权和二进制帧格式以当前官方文档为准，不复制旧协议。
+10. 网络层仅使用现有 `httpx`、`websockets`、`opuslib-next`；不增加仅macOS可用的依赖，Windows `libopus` 和PyInstaller收集必须进入验收。
 
 验收：
 
-- [ ] 一段设备语音能返回转写
-- [ ] 指定文本能在设备播放
-- [ ] API超时和限流不使Runtime崩溃
-- [ ] 默认日志不保存原始语音
+- [ ] 编解码单元测试覆盖16/24 kHz、60 ms帧、跨块缓冲、尾帧补齐和非法参数
+- [ ] fake ASR/TTS覆盖partial、final、取消、超时、限流、乱序和所有stop清理路径
+- [ ] 真实火山外部测试返回目标文本；无Key必须记为NOT RUN，不能算PASS
+- [ ] EVA1和EVA2分别完成语音转写且不串设备、utterance或帧序号
+- [ ] 指定文本分别能在EVA1和EVA2播放，另一台不播放，目标设备最终回到listening
+- [ ] MQTT加密UDP与WebSocket二进制两种Profile分别完成至少一个闭环
+- [ ] API Key无效、403、429、5xx、超时和设备断开不使Runtime崩溃或遗留会话
+- [ ] 默认日志、SQLite和Browser事件流不保存原始语音、Base64音频、API Key或认证头
+- [ ] macOS与Windows通过Opus编解码、fake Provider集成和PyInstaller导入冒烟
 
 ## Phase 6：Siri式WakeGate
 

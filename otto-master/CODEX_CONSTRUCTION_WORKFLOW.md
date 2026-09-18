@@ -61,7 +61,7 @@ git ls-remote --heads origin
 5. `CODEX_ARCHITECTURE.md`
 6. `docs/DEV_PROGRESS.md`
 7. 当前Phase的 `docs/CONSTRUCTION_PLAN.md`
-8. 与本轮相关的合同，例如 `docs/MESSAGE_CONTRACTS.md`、`docs/MQTT_CONTROL_CONTRACT.md`
+8. 与本轮相关的合同，例如 `docs/MESSAGE_CONTRACTS.md`、`docs/DEVICE_TRANSPORT_CONTRACT.md`、`docs/MQTT_CONTROL_CONTRACT.md`；Phase 5还必须完整阅读 `docs/VOLCENGINE_SPEECH_INTEGRATION.md`
 9. `CODEX_RULES_TESTING.md` 和 `CODEX_RULES_GIT.md`
 
 不得依赖聊天记忆替代文件内容。发现文档互相冲突时，先修正文档和记录决策，不得一边猜测一边实现。

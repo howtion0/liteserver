@@ -22,14 +22,24 @@ class FakeClock:
         self.value += timedelta(seconds=seconds)
 
 
-def _message(topic: str, payload: dict[str, JsonValue]) -> Message:
+def _message(
+    topic: str,
+    payload: dict[str, JsonValue],
+    *,
+    transport: str = "mqtt",
+) -> Message:
     device_id = "aabbccddee01"
     return Message.create(
         topic=topic,
         kind=MessageKind.EVENT,
-        source=f"device:{device_id}:mqtt",
+        source=f"device:{device_id}:{transport}",
         target=f"device:{device_id}",
-        payload={"device_id": device_id, "mac": device_id, **payload},
+        payload={
+            "device_id": device_id,
+            "mac": device_id,
+            "transport": transport,
+            **payload,
+        },
     )
 
 
@@ -172,6 +182,131 @@ async def test_manager_rejects_cross_target_identity(tmp_path: Path) -> None:
         await bus.publish(forged)
         await bus.drain()
         assert await manager.list_devices() == []
+    finally:
+        await manager.shutdown()
+        await bus.stop()
+        await database.close()
+
+
+@pytest.mark.asyncio
+async def test_manager_selects_transport_priority_and_scopes_disconnects(
+    tmp_path: Path,
+) -> None:
+    database = await Database.open(tmp_path / "otto.db")
+    bus = MessageBus()
+    await bus.start()
+    manager = DeviceManager(database, bus, stale_seconds=15, offline_seconds=30)
+    await manager.start()
+    hello = {
+        "name": "EVA1",
+        "firmware_version": "2.0.5-test",
+        "capabilities": {"actions": True, "state": True, "stop": True},
+    }
+    try:
+        for transport in ("tcp", "websocket", "mqtt"):
+            await bus.publish(_message("device.connected", hello, transport=transport))
+            await bus.publish(
+                _message("device.heartbeat.received", {}, transport=transport)
+            )
+            await bus.drain()
+
+        device = await manager.get_device("aabbccddee01")
+        assert device is not None
+        assert device["transport"] == "mqtt"
+        assert device["available_transports"] == ["mqtt", "websocket", "tcp"]
+        assert device["status"] == "online"
+
+        await bus.publish(
+            _message(
+                "device.actions.catalog.received",
+                {"actions": [{"name": "mqtt-only"}]},
+                transport="mqtt",
+            )
+        )
+        await bus.publish(
+            _message(
+                "device.state.received",
+                {"action_state": "idle", "current_action": None},
+                transport="mqtt",
+            )
+        )
+        await bus.publish(
+            _message(
+                "device.connected",
+                {
+                    "name": "EVA1-WS",
+                    "firmware_version": "ws-test",
+                    "capabilities": {"actions": False, "state": True, "stop": True},
+                },
+                transport="websocket",
+            )
+        )
+        await bus.publish(
+            _message(
+                "device.actions.catalog.received",
+                {"actions": [{"name": "wrong-transport-action"}]},
+                transport="websocket",
+            )
+        )
+        await bus.publish(
+            _message(
+                "device.state.received",
+                {"action_state": "moving", "current_action": "wrong-state"},
+                transport="websocket",
+            )
+        )
+        await bus.drain()
+        isolated = await manager.get_device("aabbccddee01")
+        assert isolated is not None
+        assert isolated["name"] == "EVA1"
+        assert isolated["action_state"] == "idle"
+        assert isolated["capabilities"]["actions"] is True
+        assert await manager.get_actions("aabbccddee01") == [{"name": "mqtt-only"}]
+
+        await bus.publish(
+            Message.create(
+                topic="device.transport.unavailable",
+                kind=MessageKind.EVENT,
+                source="device_mqtt",
+                target="service:device_manager",
+                payload={"transport": "mqtt", "reason": "mqtt_disconnected"},
+            )
+        )
+        await bus.drain()
+        fallback = await manager.get_device("aabbccddee01")
+        assert fallback is not None
+        assert fallback["transport"] == "websocket"
+        assert fallback["status"] == "online"
+        assert fallback["name"] == "EVA1-WS"
+        assert fallback["action_state"] == "unknown"
+        assert fallback["actions_count"] == 0
+        assert fallback["capabilities"]["actions"] is False
+
+        await bus.publish(
+            _message(
+                "device.disconnected",
+                {"reason": "websocket_closed"},
+                transport="websocket",
+            )
+        )
+        await bus.drain()
+        tcp = await manager.get_device("aabbccddee01")
+        assert tcp is not None
+        assert tcp["transport"] == "tcp"
+        assert tcp["status"] == "online"
+
+        await bus.publish(
+            _message(
+                "device.disconnected",
+                {"reason": "tcp_closed"},
+                transport="tcp",
+            )
+        )
+        await bus.drain()
+        offline = await manager.get_device("aabbccddee01")
+        assert offline is not None
+        assert offline["available_transports"] == []
+        assert offline["status"] == "offline"
     finally:
         await manager.shutdown()
         await bus.stop()

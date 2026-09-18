@@ -4,7 +4,7 @@ Otto Master 是一个面向 Otto 机器人集群的跨平台 Python Runtime。�
 
 ## 当前状态
 
-当前为 **Phase 4C / 0.4.2 本地验收与跨平台探针通过、正式SHA待复验**：已接入Master MQTT Gateway、Device Session、只读连接验证、持久命令仓库和每设备Dispatcher。两个fake设备经真实内嵌Broker完成精确动作/stop下发、`requested → published → accepted → moving → completed`、隔离和重复ID去重。TCP/WebSocket兼容、固件MQTT缺口、语音云服务和EVA真机验收仍属于后续检查点。
+当前为 **Phase 4D / 0.4.3 本地验收通过**：MQTT、认证的TCP `otto-master/1`和Xiaozhi WebSocket v1已翻译到同一设备消息与命令生命周期，Device Session按`mqtt → websocket → tcp`选择当前传输。fake设备已通过真实loopback Socket完成查询、动作、stop、传输隔离和资源释放，WebSocket Opus只以有界内存引用进入Message Bus；全量80个自动测试通过。固件MQTT缺口、EVA1/EVA2真机和Phase 5语音云服务仍未验收。
 
 ## 核心架构
 
@@ -30,7 +30,7 @@ WebUI ─────────────────────── Gate
 uv run --project . python -m otto_master
 ```
 
-入口会持续运行，默认监听Web `8080` 和MQTT `1883`，发布 `master.local`，收到 `SIGINT` 或 `SIGTERM` 后按依赖反向关闭。
+入口会持续运行，默认监听Web `8080` 和MQTT `1883`，并在Web端口提供配置的设备WebSocket路径；TCP `8765`默认关闭。Runtime发布 `master.local`，收到 `SIGINT` 或 `SIGTERM` 后按依赖反向关闭。
 
 默认配置绑定局域网地址。暴露到局域网前，在本地 `.env` 设置高强度 `OTTO_CONSOLE_TOKEN` 和 `OTTO_PROVISIONING_TOKEN`；未配置时，状态修改、WebSocket事件流和设备发放接口会失败关闭。MQTT禁止匿名连接，Master缺少显式密码时会在 `.local-secrets/` 生成随机本地凭据。
 
@@ -51,7 +51,9 @@ uv run --project . --extra dev pytest -q
 - [docs/CONSTRUCTION_PLAN.md](docs/CONSTRUCTION_PLAN.md)：施工路线
 - [docs/DEV_PROGRESS.md](docs/DEV_PROGRESS.md)：当前进度
 - [docs/MESSAGE_CONTRACTS.md](docs/MESSAGE_CONTRACTS.md)：内部消息格式
+- [docs/DEVICE_TRANSPORT_CONTRACT.md](docs/DEVICE_TRANSPORT_CONTRACT.md)：MQTT、TCP与Xiaozhi WebSocket设备传输合同
 - [docs/MQTT_CONTROL_CONTRACT.md](docs/MQTT_CONTROL_CONTRACT.md)：MQTT Topic、动作协议、迁移与EVA真机验收
+- [docs/VOLCENGINE_SPEECH_INTEGRATION.md](docs/VOLCENGINE_SPEECH_INTEGRATION.md)：Phase 5火山ASR/TTS、Opus数据流与验收边界
 - [docs/SERVER_CONSOLE_REQUIREMENTS.md](docs/SERVER_CONSOLE_REQUIREMENTS.md)：打包前Web控制台、设备接入、连接验证、动作闭环和验收清单
 
 ## 运行产物

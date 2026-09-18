@@ -27,6 +27,7 @@ from .commands import (
 )
 
 _DEVICE_ID = re.compile(r"^[0-9a-f]{12}$")
+_SUPPORTED_TRANSPORTS = frozenset({"mqtt", "tcp", "websocket"})
 _ACTION_PRIORITY = 10
 _STOP_PRIORITY = 0
 _EVENT_TOPICS = frozenset(
@@ -313,7 +314,7 @@ class CommandDispatcher:
     async def _handle_request(self, message: Message, command_type: CommandType) -> None:
         try:
             spec = self._spec_from_message(message, command_type)
-            await self._validate_spec(spec)
+            spec = await self._validate_spec(spec)
             record, inserted = await self.repository.create(spec)
             if inserted:
                 record = await self._enqueue(spec)
@@ -375,7 +376,7 @@ class CommandDispatcher:
             confirmation=confirmation,
         )
 
-    async def _validate_spec(self, spec: CommandSpec) -> None:
+    async def _validate_spec(self, spec: CommandSpec) -> CommandSpec:
         if not self._accepting:
             raise DispatchRequestError("dispatcher_unavailable", "dispatcher is unavailable")
         device = await self.devices.get_device(spec.device_id)
@@ -383,8 +384,11 @@ class CommandDispatcher:
             raise DispatchRequestError("device_not_found", "device does not exist")
         if not bool(device.get("enabled", True)):
             raise DispatchRequestError("device_disabled", "device is disabled")
-        if device.get("transport") != "mqtt":
-            raise DispatchRequestError("transport_unavailable", "device is not using MQTT")
+        transport = device.get("transport")
+        if not isinstance(transport, str) or transport not in _SUPPORTED_TRANSPORTS:
+            raise DispatchRequestError(
+                "transport_unavailable", "device has no supported active transport"
+            )
         status = device.get("status")
         if status != "online":
             raise DispatchRequestError("device_not_online", "device is not online")
@@ -398,7 +402,18 @@ class CommandDispatcher:
                 f"device does not declare {required_capability} capability",
             )
         if spec.command_type is CommandType.STOP:
-            return
+            return CommandSpec(
+                command_id=spec.command_id,
+                correlation_id=spec.correlation_id,
+                command_type=spec.command_type,
+                device_id=spec.device_id,
+                target=spec.target,
+                source=spec.source,
+                transport=transport,
+                action=spec.action,
+                parameters=spec.parameters,
+                confirmation=spec.confirmation,
+            )
         if not spec.confirmation:
             raise DispatchRequestError(
                 "confirmation_required", "robot movement requires explicit confirmation"
@@ -422,6 +437,18 @@ class CommandDispatcher:
             )
         if pending >= self.config.queue_size_per_device:
             raise DispatchRequestError("device_queue_full", "device action queue is full")
+        return CommandSpec(
+            command_id=spec.command_id,
+            correlation_id=spec.correlation_id,
+            command_type=spec.command_type,
+            device_id=spec.device_id,
+            target=spec.target,
+            source=spec.source,
+            transport=transport,
+            action=spec.action,
+            parameters=spec.parameters,
+            confirmation=spec.confirmation,
+        )
 
     @staticmethod
     def _validate_parameters(
@@ -698,16 +725,24 @@ class CommandDispatcher:
         outbound_topic: str,
     ) -> None:
         if message.topic == "device.transport.unavailable":
+            if message.payload.get("transport") != spec.transport:
+                return
             reason = message.payload.get("reason")
             facts.disconnected = reason if isinstance(reason, str) else "transport_unavailable"
             return
-        if message.topic == "device.state.changed" and message.payload.get("status") in {
-            "stale",
-            "offline",
-            "error",
-            "disabled",
-        }:
-            facts.disconnected = f"device_{message.payload.get('status')}"
+        if message.topic == "device.state.changed":
+            if message.payload.get("transport") != spec.transport:
+                facts.disconnected = "device_transport_changed"
+                return
+            if message.payload.get("status") in {
+                "stale",
+                "offline",
+                "error",
+                "disabled",
+            }:
+                facts.disconnected = f"device_{message.payload.get('status')}"
+            return
+        if message.payload.get("transport") != spec.transport:
             return
         if message.topic == "device.command.failed":
             command_topic = message.payload.get("command_topic")
@@ -820,7 +855,7 @@ class CommandDispatcher:
                 kind=MessageKind.COMMAND,
                 source="dispatcher",
                 target=spec.target,
-                payload={"device_id": spec.device_id, "transport": "mqtt"},
+                payload={"device_id": spec.device_id, "transport": spec.transport},
             )
             outstanding.add(query.message_id)
             self._query_owners[query.message_id] = spec.command_id
@@ -838,7 +873,7 @@ class CommandDispatcher:
         async with self._state_lock:
             if message.topic == "device.transport.unavailable":
                 deliveries = list(self._event_queues.values())
-            elif message.topic == "device.state.changed" and message.correlation_id is None:
+            elif message.topic == "device.state.changed":
                 device_id = message.payload.get("device_id")
                 if isinstance(device_id, str):
                     context = self._contexts.get(device_id)

@@ -68,8 +68,9 @@ Phase 0 不运行不存在的应用测试。
 - MQTT Topic到内部Message的双向映射。
 - 相同命令ID重复投递时只执行一次。
 - MQTT断线、重连、超时和非retain动作。
-- WebSocket hello与断线重连。
-- 二进制Opus帧与JSON帧分流。
+- TCP首帧身份认证、帧上限、连接替换与断线降级。
+- WebSocket hello、设备身份、断线重连与不支持协议版本拒绝。
+- 二进制Opus帧与JSON帧分流，音频引用按device、utterance、sequence和frame_ref隔离。
 - ASR → WakeGate → TTS回应。
 - WebUI命令 → Dispatcher → 模拟设备。
 - OTA清单和固件下载。
@@ -115,6 +116,12 @@ EVA2当前IP: 192.168.172.117
 - 真实API测试必须显式标记，例如 `@pytest.mark.external`。
 - 无key、超时、限流和返回异常都必须有行为测试。
 - 唤醒链路遇到API失败必须保持fail-closed。
+- 火山ASR外部测试必须记录资源ID、请求ID、首个partial延迟、final延迟和最终文本，但不得记录API Key、认证头或原始音频。
+- 火山TTS外部测试必须验证HTTP状态、服务事件码、首音频延迟、PCM参数、60 ms Opus帧数量和首帧可解码。
+- ASR 2.0返回403时不得自动降级并伪报成功；只有配置明确允许时才使用已经验收的ASR 1.0资源。
+- 真实云烟测成功不等于设备闭环通过；EVA1/EVA2隔离、实际播放和回到listening必须单独验收。
+- ASR/TTS测试生成的临时密钥文件和音频必须使用受限权限，并在 `finally` 清理；仓库状态检查不得出现测试产物。
+- Phase 5在macOS与Windows都必须运行Opus编码/解码和fake Provider测试；实体Windows/PyInstaller还需验证 `libopus` 动态库收集。
 
 ## 6. 并发测试
 
