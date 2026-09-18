@@ -77,6 +77,9 @@ voice.transcription.partial
 voice.transcription.completed
 voice.transcription.displayed
 voice.transcription.failed
+voice.tool.requested
+voice.tool.completed
+voice.tool.failed
 voice.wake.accepted
 voice.wake.rejected
 voice.command.window.opened
@@ -96,6 +99,10 @@ robot.stop.requested
 robot.stop.accepted
 robot.stop.completed
 robot.stop.failed
+device.conversation.start.requested
+device.conversation.stop.requested
+device.conversation.control.accepted
+device.conversation.control.failed
 cluster.broadcast.requested
 storage.write.requested
 system.shutdown.requested
@@ -178,9 +185,10 @@ TTS使用两层状态：`tts.synthesis.*`描述云合成，`tts.playback.*`描�
 
 `test0.9`新增并冻结以下运行时语义：
 
-- `voice.endpoint.detected`表示auto模式下非空partial稳定达到配置窗口，ASR将停止接收新帧、排空已入队音频并请求Provider final；它不等同设备发送了`listen/stop`。
+- `voice.endpoint.detected`表示auto模式下某个一次性服务端端点获胜，payload的`method`为`partial_stability`或`vad_silence`。后者必须先在同一`device_id + session_id + utterance_id`观测`speaking=true`，再连续静音达到配置窗口；ASR随后停止接收新帧、排空已入队音频并请求Provider final。它不等同设备发送了`listen/stop`。
 - ASR、LLM和TTS之间使用有界生产者/消费者队列；取消、队列满和下游失败必须向上游传播，不能遗留后台生产任务。
 - `audio.input.activity`至少携带`device_id + transport + session_id + utterance_id + speaking`；只有精确匹配当前轮且`speaking=true`才能取消8秒静默计时，旧轮、跨设备和`false`事件不能延长窗口。
+- ASR final的`text`允许为空以保留Provider事实，但空白final不得上屏、调用LLM或永久停在`recognizing`；WakeGate只触发一次本地笑声并重新开放下一条utterance，重复或过期final无效。
 - 正常回答完成后不关闭设备session，而是重新进入`laughing`；本地笑声完成后用一次`tts start → stop`让固件建立新的`listen/start`和utterance，再进入下一轮识别。
 - 8秒内没有真实VAD/partial时，Server发送`goodbye`并发布`voice.session.closed(reason=server_goodbye)`；按钮退出由设备发送`goodbye`并发布`voice.session.closed(reason=device_goodbye)`。两者都必须回到`waiting`并释放音频引用。
 - 异常关闭仍失败关闭；失败状态只允许由新的不同session重新开始，迟到的旧session消息不能复活对话。
@@ -198,7 +206,7 @@ TTS使用两层状态：`tts.synthesis.*`描述云合成，`tts.playback.*`描�
 
 ### 7.2 LLM工具调用与结果
 
-DeepSeek工具名使用API兼容的`self_otto_*`，Server再映射到设备动作目录。模型只收到当前语音设备的白名单Schema，不能提供或覆盖`device_id`、transport、Topic、confirmation或command ID。每轮只允许纯文本或一个工具调用，二者混合、多个调用、未知工具、非法JSON或越界参数全部失败关闭。
+DeepSeek工具名使用API兼容的`self_otto_*`，Server再映射到设备动作目录。模型只收到当前语音设备的白名单Schema，不能提供或覆盖`device_id`、transport、Topic、confirmation或command ID。每轮最多一个工具调用：工具出现前仍未形成完整句子的内部文本前缀会被丢弃；若完整句子已经提交给TTS，则必须先完成这些句子的播放并发送`tts stop`，再串行执行工具。工具后继续输出文字、多个调用、未知工具、非法JSON或越界参数全部失败关闭。
 
 工具生命周期发布以下内部事件：
 
@@ -210,9 +218,17 @@ voice.tool.failed
 
 三者至少携带`device_id + session_id + utterance_id + tool_call_id + tool_name`。`completed`额外携带持久`command_id + command_type + status=completed`以及可选`action`；`failed`只携带稳定、截断后的`error_code`。原始Provider响应、认证信息和任意模型错误文本不得进入事件。参数的权威审计记录位于Dispatcher持久命令payload，不在事件中复制第二份。
 
-`voice.tool.requested`不代表设备已接收或动作完成；只有Dispatcher持久状态到达`completed`才允许发布`voice.tool.completed`。成功工具轮不生成TTS文字，失败轮只使用固定用户提示。显式`laugh`若已真实完成，可直接充当下一轮笑声门禁，不得再提交第二次笑声。
+`voice.tool.requested`不代表设备已接收或动作完成；只有Dispatcher持久状态到达`completed`才允许发布`voice.tool.completed`。纯工具成功轮不生成TTS；若上段规则已经提交完整前置句，只播放该前置句，不再朗读动作结果。失败轮只使用固定用户提示。TTS与动作必须串行，不能一边说话一边驱动舵机。显式`laugh`若已真实完成，可直接充当下一轮笑声门禁，不得再提交第二次笑声。
 
 普通`ChatMessage`当前只表示可朗读文本，不支持OpenAI结构化tool/tool-result历史。因此工具轮不写成虚构的assistant“已执行”文本；工具审计由上述事件和Command Repository负责。
+
+### 7.3 Web对话投影与批量命令
+
+Web Gateway维护按稳定`device_id`隔离的有界对话投影，只消费已经脱敏的`voice.session.*`、转写、TTS、工具和失败事件。投影包含当前或最近的session/utterance、用户文字、助手文字、工具状态和更新时间；新session建立后，旧session的迟到事件不得覆盖它。投影不是新的领域事实来源，刷新或事件流重连时仅用于恢复控制台视图。
+
+批量动作与批量stop不是广播消息。Web Gateway必须把1至16个显式、唯一的`device_id`拆成独立Dispatcher调用，并逐设备返回成功或稳定错误；空目标、通配符、名称、IP和未确认请求在进入Message Bus前拒绝。一台设备失败不能撤销或掩盖其他设备的结果。
+
+同一轮增加正式的批量会话控制：Web Gateway把显式目标拆成`device.conversation.start.requested|stop.requested`单设备命令，Conversation Control Service为每台设备生成唯一命令ID并等待同目标、同传输、同correlation的`device.conversation.control.accepted|failed`。Gateway仅编码为`{"type":"otto_conversation","id":"...","command":"start|stop"}`；固件ACK为`otto_conversation_ack`。ACK表示设备接受切换，不等于WakeGate已经建立session；控制台继续以`audio.input.started`和`voice.session.state.changed`显示真实状态。重复ID必须只重放ACK，不能再次切换；该链不经过旧8080诊断服务。
 
 ## 8. 兼容性
 

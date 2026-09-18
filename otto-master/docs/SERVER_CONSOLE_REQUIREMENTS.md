@@ -106,7 +106,16 @@ ESP32的ACK、状态、心跳和结果按相反方向回到浏览器。
 - 事件必须带服务端序号或游标；发现序号缺口时重新同步，不盲目追加。
 - 原始JSON只放在开发详情区，并完成HTML转义和敏感字段脱敏。
 
-### 2.5 设置
+### 2.5 多设备对话泳道
+
+- 每台已注册设备独立显示当前或最近对话状态，不把EVA1和EVA2文字合并到同一个日志框。
+- 每条泳道至少包含稳定device_id、session、utterance、状态、用户最终转写、助手已提交句子、工具状态、动作和更新时间。
+- 新utterance开始时可以暂时保留上一轮完整文字，直到首个新partial或新句子到达，避免界面闪空；旧session迟到事件不得覆盖新session。
+- 页面刷新或事件流重连后从Server有界快照恢复，不依赖浏览器本地历史。
+- 对话投影只读取脱敏领域事件，不得包含PCM、Opus、Base64音频、API Key、MQTT密码或Authorization头。
+- 对话文字属于私密用户内容；快照API与实时事件流都必须经过控制台授权，不能因设备/健康读接口可公开而公开转写和回答。
+
+### 2.6 设置
 
 设置页至少分为：
 
@@ -235,14 +244,20 @@ unknown
 - 点击发送后立即显示command_id和 `requested`，不显示“成功”。
 - 相同command_id重复到达设备时不得执行两次。
 - 当前命令未完成时，同设备后续动作进入有序队列或被明确拒绝，不允许无序并发。
+- WebUI可为常用动作提供快捷按钮，但可用性仍取自所选在线设备动作目录的交集；步数、速度、方向和幅度仍由Server二次校验，快捷按钮不是协议旁路。
+- 动作带本地音效时，`action_state=idle`但`sound_busy=true`仍属于执行中；只有本地音效排空后才能显示completed并放行下一动作。
+- 只读设备状态加载成功不代表当前标签页拥有控制授权。无令牌或收到401时，动作、stop和对话控件必须锁定，页面必须常驻显示“命令未进入服务端”及原因，不能只给短暂toast或伪装成设备无响应。
+- 正式控制台端口必须唯一可辨；当前Runtime为8081，遗留8080诊断服务不得与正式控制台同时驻留。
 
 ### 5.2 多设备、分组与广播
 
 - 发送前列出解析后的每个device_id、名称、在线状态和动作兼容性。
-- Dispatcher必须把广播拆成多个单设备子命令，每台设备独立command_id和结果。
+- Web Gateway必须把显式选择拆成多个单设备Dispatcher调用，每台设备独立command_id和结果；不同设备可并发，同一设备仍保持串行。
 - 部分设备失败时显示部分成功，不能把整个广播显示为成功。
 - 不支持该动作、离线或心跳过期的设备必须在发送前明确列出。
 - 广播动作必须二次确认；移动类动作建议要求输入目标设备数量或确认短语。
+- 普通批量动作与批量stop必须提供1至16个唯一device_id；空集合、通配符、设备名称、IP或隐式“所有设备”在进入Dispatcher前拒绝。
+- 多设备对话测试提供“进入对话/退出对话”批量控制，沿正式Message Bus与设备Gateway逐台等待关联ACK；控件只对声明`conversation_control`能力且在线的显式目标开放。ACK后每台设备是否真正进入laughing/listening必须继续由对话泳道显示，不能用按钮成功提示替代真实session状态。
 - EVA1和EVA2可以同时执行不同动作，结果不得串设备或串correlation_id。
 - 集群停止必须显示每台设备的stop ACK和最终idle结果。
 
@@ -256,7 +271,7 @@ unknown
 | published | 已发布 | 已发送到设备Topic |
 | accepted | 设备已接收 | 设备已排队，不代表完成 |
 | moving | 执行中 | 设备状态确认动作中 |
-| completed | 已完成 | 对应动作最终回到idle |
+| completed | 已完成 | 对应动作最终回到idle，且已上报的本地音效不再busy |
 | rejected | 已拒绝 | 参数、能力或设备拒绝 |
 | timeout | 已超时 | 在约定时间内缺少响应 |
 | disconnected | 连接中断 | 执行期间设备离线 |
@@ -274,10 +289,14 @@ GET    /api/v1/devices
 GET    /api/v1/devices/{device_id}
 PATCH  /api/v1/devices/{device_id}
 GET    /api/v1/devices/{device_id}/actions
+GET    /api/v1/conversations
 POST   /api/v1/devices/{device_id}/verify
 POST   /api/v1/commands/action
+POST   /api/v1/commands/actions/batch
 GET    /api/v1/commands/{command_id}
 POST   /api/v1/devices/{device_id}/stop
+POST   /api/v1/commands/stops/batch
+POST   /api/v1/commands/conversations/batch
 POST   /api/v1/cluster/stop
 GET    /api/v1/events
 GET    /api/v1/settings
@@ -302,6 +321,8 @@ API要求：
 - MQTT禁止匿名连接并启用每设备ACL。
 - Web绑定非loopback地址时必须启用控制台认证，不能让同一Wi-Fi任意用户控制机器人。
 - 状态修改接口必须验证会话和请求来源；WebSocket也必须认证并检查Origin。
+- 控制台令牌不得写入HTML、日志或普通API响应。本机开发页若使用URL fragment一次性引导令牌，只允许`localhost/127.0.0.1/::1`，片段不得发送到HTTP且脚本读取后必须立即用`history.replaceState`清除；LAN页面仍需用户显式输入。
+- 未授权页面可以查看允许公开的健康快照，但动作按钮必须明确提示认证失败，不能让用户误以为命令已经下发。
 - 设备名称、错误文本和日志内容输出到HTML前必须转义。
 - API响应、浏览器日志、事件流和导出诊断包不得包含MQTT密码、云API Key或完整Authorization头。
 - action、speed、steps、direction和amount必须在Server再次校验，不能只依赖前端控件。

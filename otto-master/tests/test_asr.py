@@ -83,6 +83,22 @@ def _frame_message(
     )
 
 
+def _activity_message(
+    device: str,
+    session: str,
+    utterance: str,
+    speaking: bool,
+) -> Message:
+    message = _audio_message("audio.input.activity", device, session, utterance)
+    return Message.create(
+        topic=message.topic,
+        kind=message.kind,
+        source=message.source,
+        target=message.target,
+        payload={**message.payload, "speaking": speaking},
+    )
+
+
 async def _wait_topic(observed: list[Message], topic: str) -> Message:
     deadline = asyncio.get_running_loop().time() + 2
     while asyncio.get_running_loop().time() < deadline:
@@ -315,6 +331,93 @@ async def test_asr_partial_stability_closes_stream_without_device_stop() -> None
         assert service.status()["endpointed"] == 1
         assert service.status()["endpoint_discarded_frames"] == 0
         assert service.status()["endpoint_preserved_frames"] == 2
+        assert service.status()["completed"] == 1
+    finally:
+        await service.shutdown()
+        await bus.unsubscribe_observer(observer)
+        await bus.stop()
+
+
+@pytest.mark.asyncio
+async def test_asr_stable_vad_silence_closes_stream_when_provider_has_no_partial() -> None:
+    class FinalOnInputCloseProvider:
+        def __init__(self) -> None:
+            self.input_closed = asyncio.Event()
+            self.received: list[bytes] = []
+
+        async def transcribe(
+            self,
+            pcm_chunks: AsyncIterable[bytes],
+            *,
+            uid: str,
+            sample_rate: int = 16_000,
+        ) -> AsyncIterator[SpeechRecognitionResult]:
+            async for chunk in pcm_chunks:
+                self.received.append(chunk)
+            self.input_closed.set()
+            yield SpeechRecognitionResult("奶龙在呢！", True, "stream-request")
+
+    bus = MessageBus()
+    reader = FakeFrameReader()
+    provider = FinalOnInputCloseProvider()
+    service = AsrService(
+        bus,
+        reader,
+        provider,
+        chunk_frames=1,
+        partial_stability_seconds=0.02,
+    )
+    observed: list[Message] = []
+    parameters = OpusParameters(16_000)
+    packets = StreamingOpusEncoder(parameters).feed(
+        b"\x00" * parameters.pcm_bytes_per_frame * 3
+    )
+    for sequence, packet in enumerate(packets):
+        reader.frames[f"frame-{sequence}"] = packet
+
+    await bus.start()
+    observer = await bus.subscribe_observer(observed.append)
+    await service.start()
+    try:
+        await service.arm_next_utterance("eva000000001", "s1")
+        await bus.publish(_audio_message("audio.input.started", "eva000000001", "s1", "u1"))
+        await bus.publish(_activity_message("eva000000001", "s1", "u1", False))
+        await asyncio.sleep(0.03)
+        assert service.status()["active_utterances"] == 1
+
+        await bus.publish(_activity_message("eva000000001", "s1", "u1", True))
+        for sequence in range(2):
+            await bus.publish(
+                _frame_message(
+                    "eva000000001",
+                    "s1",
+                    "u1",
+                    sequence,
+                    f"frame-{sequence}",
+                )
+            )
+        await bus.publish(_activity_message("eva000000001", "s1", "u1", False))
+        await asyncio.sleep(0.01)
+        await bus.publish(_activity_message("eva000000001", "s1", "u1", True))
+        await asyncio.sleep(0.03)
+        assert not any(message.topic == "voice.endpoint.detected" for message in observed)
+
+        await bus.publish(
+            _frame_message("eva000000001", "s1", "u1", 2, "frame-2")
+        )
+        await bus.publish(_activity_message("eva000000001", "s1", "u1", False))
+        await bus.drain()
+
+        completed = await _wait_topic(observed, "voice.transcription.completed")
+        endpoint = await _wait_topic(observed, "voice.endpoint.detected")
+
+        assert provider.input_closed.is_set()
+        assert completed.payload["text"] == "奶龙在呢！"
+        assert endpoint.payload["method"] == "vad_silence"
+        assert endpoint.payload["discarded_frames"] == 0
+        assert len(provider.received) == 3
+        assert service.status()["vad_endpointed"] == 1
+        assert service.status()["partial_endpointed"] == 0
         assert service.status()["completed"] == 1
     finally:
         await service.shutdown()

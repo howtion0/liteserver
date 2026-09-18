@@ -244,6 +244,32 @@ async def _respond_to_one_action(
             )
 
 
+async def _respond_to_conversation_control(
+    client: MQTTClient,
+    provisioning: dict[str, object],
+    command: str,
+) -> dict[str, object]:
+    packet = await client.deliver_message(timeout_duration=2)
+    assert packet is not None
+    assert packet.qos == 0
+    assert packet.retain is False
+    payload = json.loads(bytes(packet.data))
+    assert payload["type"] == "otto_conversation"
+    assert payload["command"] == command
+    assert isinstance(payload["id"], str)
+    await _publish_device(
+        client,
+        provisioning,
+        {
+            "type": "otto_conversation_ack",
+            "id": payload["id"],
+            "command": command,
+            "ok": True,
+        },
+    )
+    return payload
+
+
 async def _wait_for_command(
     client: httpx.AsyncClient,
     command_id: str,
@@ -366,6 +392,7 @@ async def test_runtime_serves_health_and_releases_network_ports(tmp_path: Path) 
         ),
         device_udp=replace(loaded.device_udp, enabled=False),
         discovery=replace(loaded.discovery, enabled=False),
+        secrets=replace(loaded.secrets, console_token=None),
     )
     runtime = Runtime(config)
 
@@ -523,7 +550,12 @@ async def test_runtime_two_fake_devices_read_only_mqtt_integration(tmp_path: Pat
                         "mac": mac,
                         "firmware_version": "2.0.5-test",
                         "ip_address": f"192.0.2.{10 + index}",
-                        "capabilities": {"actions": True, "state": True, "stop": True},
+                        "capabilities": {
+                            "actions": True,
+                            "state": True,
+                            "stop": True,
+                            "conversation_control": True,
+                        },
                     },
                 )
                 await _publish_device(mqtt_client, item, {"type": "heartbeat"})
@@ -584,6 +616,50 @@ async def test_runtime_two_fake_devices_read_only_mqtt_integration(tmp_path: Pat
             for mqtt_client in fake_clients:
                 with pytest.raises(TimeoutError):
                     await mqtt_client.deliver_message(timeout_duration=0.1)
+
+            start_responders = [
+                asyncio.create_task(
+                    _respond_to_conversation_control(mqtt_client, item, "start")
+                )
+                for mqtt_client, item in zip(fake_clients, provisioned, strict=True)
+            ]
+            conversations_started = await client.post(
+                "/api/v1/commands/conversations/batch",
+                json={
+                    "device_ids": ["aabbccddee01", "aabbccddee02"],
+                    "command": "start",
+                    "confirmation": True,
+                },
+            )
+            start_down = await asyncio.gather(*start_responders)
+            assert conversations_started.status_code == 202
+            assert conversations_started.json()["accepted"] == 2
+            assert {
+                item["command_id"] for item in conversations_started.json()["items"]
+            } == {item["id"] for item in start_down}
+
+            stop_responders = [
+                asyncio.create_task(
+                    _respond_to_conversation_control(mqtt_client, item, "stop")
+                )
+                for mqtt_client, item in zip(fake_clients, provisioned, strict=True)
+            ]
+            conversations_stopped = await client.post(
+                "/api/v1/commands/conversations/batch",
+                json={
+                    "device_ids": ["aabbccddee01", "aabbccddee02"],
+                    "command": "stop",
+                    "confirmation": True,
+                },
+            )
+            stop_down = await asyncio.gather(*stop_responders)
+            assert conversations_stopped.status_code == 202
+            assert conversations_stopped.json()["accepted"] == 2
+            assert {
+                item["command_id"] for item in conversations_stopped.json()["items"]
+            } == {item["id"] for item in stop_down}
+            assert runtime.conversation_control.status()["accepted"] == 4
+            assert runtime.conversation_control.status()["pending"] == 0
 
             responder = asyncio.create_task(
                 _respond_to_read_only_verification(fake_clients[0], provisioned[0])

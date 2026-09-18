@@ -44,8 +44,10 @@ class _Utterance:
     expected_sequence: int = 0
     frame_count: int = 0
     input_finished: bool = False
+    speech_observed: bool = False
     task: asyncio.Task[None] | None = None
     endpoint_task: asyncio.Task[None] | None = None
+    endpoint_method: str | None = None
 
 
 class AsrService:
@@ -91,6 +93,8 @@ class AsrService:
         self._failed_count = 0
         self._dropped_frames = 0
         self._endpointed_count = 0
+        self._vad_endpointed_count = 0
+        self._partial_endpointed_count = 0
         self._endpoint_discarded_frames = 0
         self._endpoint_preserved_frames = 0
 
@@ -104,6 +108,7 @@ class AsrService:
         self._subscriptions = [
             await self.message_bus.subscribe("audio.input.started", self._handle_started),
             await self.message_bus.subscribe("audio.input.frame", self._handle_frame),
+            await self.message_bus.subscribe("audio.input.activity", self._handle_activity),
             await self.message_bus.subscribe("audio.input.finished", self._handle_finished),
         ]
         self._running = True
@@ -166,6 +171,8 @@ class AsrService:
             "chunk_frames": self.chunk_frames,
             "partial_stability_seconds": self.partial_stability_seconds,
             "endpointed": self._endpointed_count,
+            "vad_endpointed": self._vad_endpointed_count,
+            "partial_endpointed": self._partial_endpointed_count,
             "endpoint_discarded_frames": self._endpoint_discarded_frames,
             "endpoint_preserved_frames": self._endpoint_preserved_frames,
         }
@@ -266,6 +273,30 @@ class AsrService:
             utterance.expected_sequence += 1
             utterance.frame_count += 1
 
+    async def _handle_activity(self, message: Message) -> None:
+        fields = _audio_identity(message)
+        speaking = message.payload.get("speaking")
+        if fields is None or not isinstance(speaking, bool):
+            return
+        device_id, session_id, utterance_id = fields
+        cancelled: asyncio.Task[None] | None = None
+        async with self._lock:
+            utterance = self._active.get(device_id)
+            if (
+                utterance is None
+                or utterance.session_id != session_id
+                or utterance.utterance_id != utterance_id
+                or utterance.input_finished
+            ):
+                return
+            if speaking:
+                utterance.speech_observed = True
+                cancelled = self._cancel_endpoint_locked(utterance)
+            elif utterance.speech_observed:
+                self._schedule_endpoint_locked(utterance, "vad_silence")
+        if cancelled is not None:
+            await asyncio.gather(cancelled, return_exceptions=True)
+
     async def _handle_finished(self, message: Message) -> None:
         fields = _audio_identity(message)
         if fields is None:
@@ -288,6 +319,8 @@ class AsrService:
             endpoint_task = utterance.endpoint_task
             if endpoint_task is not None:
                 endpoint_task.cancel()
+                utterance.endpoint_task = None
+                utterance.endpoint_method = None
             try:
                 utterance.queue.put_nowait(None)
             except asyncio.QueueFull:
@@ -325,7 +358,7 @@ class AsrService:
                     final_seen = True
                     self._completed_count += 1
                     break
-                self._schedule_partial_endpoint(utterance)
+                self._schedule_endpoint_locked(utterance, "partial_stability")
             if not final_seen:
                 raise CloudProviderError(
                     "asr",
@@ -370,27 +403,48 @@ class AsrService:
                 if self._active.get(utterance.device_id) is utterance:
                     self._active.pop(utterance.device_id, None)
 
-    def _schedule_partial_endpoint(self, utterance: _Utterance) -> None:
+    def _schedule_endpoint_locked(self, utterance: _Utterance, method: str) -> None:
         previous = utterance.endpoint_task
         if previous is not None and not previous.done():
             previous.cancel()
+        utterance.endpoint_method = method
         utterance.endpoint_task = asyncio.create_task(
-            self._finish_after_partial_stability(utterance),
+            self._finish_after_endpoint_stability(utterance, method),
             name=f"otto-asr-endpoint-{utterance.device_id}-{utterance.utterance_id}",
         )
 
-    async def _finish_after_partial_stability(self, utterance: _Utterance) -> None:
+    def _cancel_endpoint_locked(self, utterance: _Utterance) -> asyncio.Task[None] | None:
+        previous = utterance.endpoint_task
+        utterance.endpoint_task = None
+        utterance.endpoint_method = None
+        if previous is not None and not previous.done():
+            previous.cancel()
+            return previous
+        return None
+
+    async def _finish_after_endpoint_stability(
+        self,
+        utterance: _Utterance,
+        method: str,
+    ) -> None:
         await asyncio.sleep(self.partial_stability_seconds)
         preserved = 0
+        current = asyncio.current_task()
         async with self._lock:
             if (
                 self._active.get(utterance.device_id) is not utterance
                 or utterance.input_finished
+                or utterance.endpoint_task is not current
+                or utterance.endpoint_method != method
             ):
                 return
             utterance.input_finished = True
             preserved = utterance.queue.qsize()
             self._endpointed_count += 1
+            if method == "vad_silence":
+                self._vad_endpointed_count += 1
+            else:
+                self._partial_endpointed_count += 1
             self._endpoint_preserved_frames += preserved
         # No new frames can enter after input_finished is set. Put the sentinel
         # behind every frame already accepted so the cloud stream receives the
@@ -404,7 +458,7 @@ class AsrService:
                 utterance.session_id,
                 utterance.utterance_id,
                 {
-                    "method": "partial_stability",
+                    "method": method,
                     "grace_seconds": self.partial_stability_seconds,
                     "discarded_frames": 0,
                     "preserved_frames": preserved,

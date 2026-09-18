@@ -26,7 +26,7 @@
           <h2 id="overview-title">系统运行状态</h2>
           <p id="system-summary" class="muted">正在读取服务端状态…</p>
         </div>
-        <button id="cluster-stop" class="danger" type="button">集群紧急停止</button>
+        <button id="cluster-stop" class="danger" type="button" disabled>集群紧急停止</button>
       </section>
 
       <section class="metric-grid" aria-label="关键指标">
@@ -44,6 +44,11 @@
           <span>设备</span>
           <strong id="device-count">0</strong>
           <small>当前登记记录</small>
+        </article>
+        <article class="metric-card">
+          <span>活跃对话</span>
+          <strong id="conversation-count">0</strong>
+          <small>按设备隔离的语音会话</small>
         </article>
         <article class="metric-card">
           <span>事件游标</span>
@@ -73,13 +78,17 @@
           <div class="panel-heading">
             <div>
               <p class="section-label">DEVICES</p>
-              <h2 id="devices-title">设备</h2>
+              <h2 id="devices-title">设备与连接</h2>
+            </div>
+            <div class="compact-actions">
+              <button id="select-online" class="secondary" type="button">选择在线设备</button>
+              <button id="clear-selection" class="secondary" type="button">清空选择</button>
             </div>
           </div>
           <div class="table-wrap">
             <table>
-              <thead><tr><th>名称</th><th>device_id</th><th>状态</th><th>传输</th></tr></thead>
-              <tbody id="device-table"><tr><td colspan="4">暂无设备</td></tr></tbody>
+              <thead><tr><th>选择</th><th>名称</th><th>device_id</th><th>连接</th><th>传输</th><th>动作 / 固件</th></tr></thead>
+              <tbody id="device-table"><tr><td colspan="6">暂无设备</td></tr></tbody>
             </table>
           </div>
         </section>
@@ -101,6 +110,90 @@
           </dl>
         </section>
       </div>
+
+      <section class="panel" aria-labelledby="control-title">
+        <div class="panel-heading">
+          <div>
+            <p class="section-label">MULTI-DEVICE CONTROL</p>
+            <h2 id="control-title">多设备批量控制</h2>
+          </div>
+          <div class="compact-actions">
+            <span id="control-auth-badge" class="badge unknown">控制未授权</span>
+            <span id="selected-count" class="badge unknown">已选 0 台</span>
+          </div>
+        </div>
+        <p id="selected-targets" class="muted">请先在设备表中勾选明确目标；空选择不会解释成全部设备。</p>
+        <p id="control-status" class="control-status unknown" role="status" aria-live="polite">尚未提交控制命令。</p>
+        <div class="quick-control" aria-labelledby="quick-action-title">
+          <div class="quick-control-heading">
+            <div>
+              <strong id="quick-action-title">快捷动作</strong>
+              <p id="quick-action-hint" class="muted">选择在线设备后显示它们共同支持的动作。</p>
+            </div>
+            <div class="quick-parameters" aria-label="快捷动作参数">
+              <label>步数<input id="quick-steps" type="number" min="1" max="100" value="3"></label>
+              <label>速度<input id="quick-speed" type="number" min="500" max="1500" step="50" value="1000"></label>
+              <label>幅度<input id="quick-amount" type="number" min="0" max="170" value="50"></label>
+            </div>
+          </div>
+          <div id="quick-action-grid" class="quick-action-grid">
+            <button class="quick-action" type="button" data-quick-action="walk" data-direction="1" disabled><span>↑</span>前进</button>
+            <button class="quick-action" type="button" data-quick-action="walk" data-direction="-1" disabled><span>↓</span>后退</button>
+            <button class="quick-action" type="button" data-quick-action="turn" data-direction="1" disabled><span>↶</span>左转</button>
+            <button class="quick-action" type="button" data-quick-action="turn" data-direction="-1" disabled><span>↷</span>右转</button>
+            <button class="quick-action" type="button" data-quick-action="jump" data-direction="0" disabled><span>⇧</span>跳跃</button>
+            <button class="quick-action" type="button" data-quick-action="swing" data-direction="0" disabled><span>↔</span>左右摇摆</button>
+            <button class="quick-action" type="button" data-quick-action="moonwalk" data-direction="1" disabled><span>◁</span>太空步</button>
+            <button class="quick-action" type="button" data-quick-action="jitter" data-direction="0" disabled><span>≈</span>抖一抖</button>
+            <button class="quick-action" type="button" data-quick-action="bend" data-direction="1" disabled><span>⌄</span>弯腰</button>
+            <button class="quick-action" type="button" data-quick-action="laugh" data-direction="1" disabled><span>♪</span>大笑</button>
+            <button class="quick-action secondary" type="button" data-quick-action="home" data-direction="1" disabled><span>⌂</span>复位</button>
+            <button id="selected-stop" class="quick-action danger" type="button" disabled><span>■</span>立即停止</button>
+          </div>
+        </div>
+        <details class="advanced-control">
+          <summary>高级动作与 JSON 参数</summary>
+          <form id="batch-action-form" class="control-grid">
+            <label>
+              共同支持的动作
+              <select id="batch-action" required disabled>
+                <option value="">请选择设备</option>
+              </select>
+            </label>
+            <label>
+              动作参数（JSON对象）
+              <textarea id="batch-parameters" rows="3" spellcheck="false">{}</textarea>
+            </label>
+            <div class="control-buttons">
+              <button id="batch-submit" type="submit" disabled>向选中设备执行</button>
+            </div>
+          </form>
+        </details>
+        <div class="conversation-control-bar">
+          <div>
+            <strong>循环对话测试</strong>
+            <p id="conversation-control-hint" class="muted">仅支持在线且声明正式对话控制能力的设备。</p>
+          </div>
+          <div class="control-buttons">
+            <button id="conversation-start" type="button" disabled>选中设备进入对话</button>
+            <button id="conversation-stop" class="danger" type="button" disabled>选中设备退出对话</button>
+          </div>
+        </div>
+        <pre id="batch-result" class="result-view">尚未提交批量命令。</pre>
+      </section>
+
+      <section class="panel" aria-labelledby="conversations-title">
+        <div class="panel-heading">
+          <div>
+            <p class="section-label">CONVERSATION LANES</p>
+            <h2 id="conversations-title">多设备对话状态与文字</h2>
+          </div>
+          <span class="muted">可由机器人按键或上方正式控制入口进入；这里按设备同步观察，互不串线。</span>
+        </div>
+        <div id="conversation-grid" class="conversation-grid" aria-live="polite">
+          <p class="empty-card">暂无设备会话。</p>
+        </div>
+      </section>
 
       <section class="panel" aria-labelledby="events-title">
         <div class="panel-heading">

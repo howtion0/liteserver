@@ -163,6 +163,8 @@ class LlmService:
         self._tool_calls = 0
         self._tool_calls_completed = 0
         self._tool_calls_failed = 0
+        self._tool_preambles_discarded = 0
+        self._tool_preambles_spoken = 0
 
     async def stream_sentences(
         self,
@@ -268,6 +270,7 @@ class LlmService:
         segmenter = SentenceSegmenter(max_chars=self.sentence_max_chars)
         remaining = self.response_max_chars
         mode: str | None = None
+        text_committed = False
         finish_reason: str | None = None
         tool_buffers: dict[int, _ToolCallBuffer] = {}
         try:
@@ -289,13 +292,20 @@ class LlmService:
                         response_chunks.append(accepted)
                         remaining -= len(accepted)
                         for sentence in segmenter.feed(accepted):
+                            text_committed = True
                             await queue.put(LlmSentence(sentence))
                     if len(accepted) != len(chunk.content) or remaining == 0:
                         self._response_truncations += 1
                         break
                 if chunk.tool_calls:
                     if mode == "text":
-                        raise LlmProtocolError("mixed_text_and_tool_call")
+                        discarded = "".join(response_chunks).strip()
+                        response_chunks.clear()
+                        segmenter.finish()
+                        if text_committed:
+                            self._tool_preambles_spoken += 1
+                        elif discarded:
+                            self._tool_preambles_discarded += 1
                     mode = "tool"
                     for delta in chunk.tool_calls:
                         buffer = tool_buffers.setdefault(delta.index, _ToolCallBuffer())
@@ -345,6 +355,8 @@ class LlmService:
             "tool_calls": self._tool_calls,
             "tool_calls_completed": self._tool_calls_completed,
             "tool_calls_failed": self._tool_calls_failed,
+            "tool_preambles_discarded": self._tool_preambles_discarded,
+            "tool_preambles_spoken": self._tool_preambles_spoken,
         }
 
     def clear_history(self, device_id: str) -> None:

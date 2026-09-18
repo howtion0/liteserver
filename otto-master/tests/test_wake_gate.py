@@ -695,6 +695,66 @@ async def test_llm_text_response_keeps_streaming_tts_and_does_not_execute_tool()
 
 
 @pytest.mark.asyncio
+async def test_spoken_tool_preamble_finishes_before_the_action_executes() -> None:
+    trace: list[str] = []
+    bus = MessageBus()
+    tool_call = LlmToolCall("call-shake-1", "self_otto_shake_leg", {})
+    llm = FakeToolSentenceSource(
+        trace,
+        [LlmSentence("那奶龙就摇摇腿。"), tool_call],
+    )
+    tts = FakeSentencePlayer(trace)
+    dispatcher = FakeDispatcher(trace)
+    robot_tools = FakeRobotToolGateway(
+        trace,
+        tool_name=tool_call.name,
+        result=RobotToolResult(
+            tool_name=tool_call.name,
+            command_id="shake-command",
+            command_type="action",
+            action="shake_leg",
+            status="completed",
+        ),
+    )
+    service = WakeGateService(
+        bus,
+        FakeAsrGate(trace),
+        llm,
+        tts,
+        dispatcher,
+        FakePlaybackSink(trace),
+        query_interval_seconds=0.001,
+        query_timeout_seconds=0.1,
+        laughter_timeout_seconds=1,
+        robot_tools=robot_tools,
+    )
+
+    await bus.start()
+    responder = await _install_sound_responder(
+        bus,
+        trace,
+        [True, False, True, False],
+    )
+    await service.start()
+    try:
+        await bus.publish(_audio_started("trigger-1"))
+        await _wait_state(service, ConversationState.LISTENING)
+        await bus.publish(_audio_started("question-1"))
+        await _wait_state(service, ConversationState.RECOGNIZING)
+        await bus.publish(_transcription("question-1", "行吧行吧"))
+        await _wait_state(service, ConversationState.LISTENING)
+
+        assert tts.played == [["那奶龙就摇摇腿。"]]
+        assert robot_tools.executions == [(DEVICE_ID, tool_call, "question-1")]
+        assert trace.index("answer:stop") < trace.index("tool:execute")
+        assert llm.recorded_results[0]["success"] is True
+    finally:
+        await service.shutdown()
+        await bus.unsubscribe(responder)
+        await bus.stop()
+
+
+@pytest.mark.asyncio
 async def test_failed_llm_tool_is_recorded_and_spoken_as_failure_only() -> None:
     trace: list[str] = []
     bus = MessageBus()
@@ -862,11 +922,11 @@ async def test_laughter_refreshes_catalog_and_idle_state_after_runtime_restart()
         query_timeout_seconds=0.1,
         laughter_timeout_seconds=1,
     )
-    states = iter((False, True, False))
+    states = iter((True, False, True, False))
 
     async def respond_state(query: Message) -> None:
-        dispatcher.state_ready = True
         busy = next(states, False)
+        dispatcher.state_ready = not busy
         trace.append(f"sound:{busy}")
         await bus.publish(
             Message.create(
@@ -895,6 +955,9 @@ async def test_laughter_refreshes_catalog_and_idle_state_after_runtime_restart()
 
         assert dispatcher.catalog_ready is True
         assert dispatcher.state_ready is True
+        assert dispatcher.attempts == 4
+        assert trace[:4].count("sound:True") == 1
+        assert trace[:4].count("sound:False") == 1
         assert len(dispatcher.actions) == 1
         assert asr.arms == [(DEVICE_ID, SESSION_ID)]
     finally:
@@ -984,6 +1047,53 @@ async def test_final_transcription_is_displayed_once_and_bounded_before_llm() ->
         assert playback_sink.transcriptions == [(DEVICE_ID, SESSION_ID, bounded)]
         assert llm.prompts == [bounded]
         assert len(dispatcher.actions) == 2
+    finally:
+        await service.shutdown()
+        await bus.unsubscribe(responder)
+        await bus.stop()
+
+
+@pytest.mark.asyncio
+async def test_empty_final_laughs_once_and_reopens_listening() -> None:
+    trace: list[str] = []
+    bus = MessageBus()
+    asr = FakeAsrGate(trace)
+    llm = FakeSentenceSource(trace)
+    dispatcher = FakeDispatcher(trace)
+    playback_sink = FakePlaybackSink(trace)
+    service = WakeGateService(
+        bus,
+        asr,
+        llm,
+        FakeSentencePlayer(trace),
+        dispatcher,
+        playback_sink,
+        query_interval_seconds=0.001,
+        query_timeout_seconds=0.1,
+        laughter_timeout_seconds=1,
+    )
+
+    await bus.start()
+    responder = await _install_sound_responder(
+        bus,
+        trace,
+        [True, False, True, False],
+    )
+    await service.start()
+    try:
+        await bus.publish(_audio_started("trigger-1"))
+        await _wait_state(service, ConversationState.LISTENING)
+        await bus.publish(_audio_started("question-1"))
+        await _wait_state(service, ConversationState.RECOGNIZING)
+        await bus.publish(_transcription("question-1", "   "))
+        await bus.publish(_transcription("question-1", ""))
+        await _wait_action_count(dispatcher, 2)
+        await _wait_state(service, ConversationState.LISTENING)
+
+        assert len(dispatcher.actions) == 2
+        assert llm.prompts == []
+        assert playback_sink.transcriptions == []
+        assert service.status()["devices"][DEVICE_ID]["turn_count"] == 0
     finally:
         await service.shutdown()
         await bus.unsubscribe(responder)
@@ -1194,6 +1304,63 @@ async def test_laughter_without_busy_true_fails_closed_and_never_arms_asr() -> N
         )
         assert "laugh:tts_start" not in trace
         assert "laugh:tts_stop" not in trace
+    finally:
+        await service.shutdown()
+        await bus.unsubscribe(responder)
+        await bus.stop()
+
+
+@pytest.mark.asyncio
+async def test_laughter_gate_retries_one_transient_state_query_timeout() -> None:
+    trace: list[str] = []
+    bus = MessageBus()
+    asr = FakeAsrGate(trace)
+    dispatcher = FakeDispatcher(trace)
+    service = WakeGateService(
+        bus,
+        asr,
+        FakeSentenceSource(trace),
+        FakeSentencePlayer(trace),
+        dispatcher,
+        FakePlaybackSink(trace),
+        query_interval_seconds=0.001,
+        query_timeout_seconds=0.01,
+        laughter_timeout_seconds=0.25,
+    )
+    query_count = 0
+
+    async def respond_after_one_drop(query: Message) -> None:
+        nonlocal query_count
+        query_count += 1
+        if query_count == 1:
+            return
+        await bus.publish(
+            Message.create(
+                topic="device.state.received",
+                kind=MessageKind.STATE,
+                source=f"device:{DEVICE_ID}:websocket",
+                target=f"device:{DEVICE_ID}",
+                correlation_id=query.message_id,
+                payload={
+                    "device_id": DEVICE_ID,
+                    "transport": "websocket",
+                    "action_state": "idle",
+                    "current_action": None,
+                    "sound_busy": query_count == 2,
+                },
+            )
+        )
+
+    await bus.start()
+    responder = await bus.subscribe("device.state.query.requested", respond_after_one_drop)
+    await service.start()
+    try:
+        await bus.publish(_audio_started("trigger-1"))
+        await _wait_state(service, ConversationState.LISTENING)
+
+        assert query_count >= 3
+        assert len(asr.arms) == 1
+        assert dispatcher.stops == 0
     finally:
         await service.shutdown()
         await bus.unsubscribe(responder)

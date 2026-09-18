@@ -3,7 +3,7 @@ name: Otto Master Phase 3
 on:
   push:
     branches:
-      - "test0.*"
+      - "test*"
     paths:
       - "otto-master/**"
       - ".github/workflows/otto-master-phase3.yml"

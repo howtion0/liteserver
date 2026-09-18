@@ -431,9 +431,13 @@ class CommandDispatcher:
             context = self._contexts.get(spec.device_id)
             active_owned = context is not None and context.active_command_id is not None
             pending = len(context.pending_actions) if context is not None else 0
-        if not active_owned and device.get("action_state") not in {"idle", None}:
+        if not active_owned and (
+            device.get("action_state") not in {"idle", None}
+            or device.get("sound_busy") is True
+        ):
             raise DispatchRequestError(
-                "device_state_unsafe", "device must be idle before accepting an action"
+                "device_state_unsafe",
+                "device motion and local sound must both be idle before accepting an action",
             )
         if pending >= self.config.queue_size_per_device:
             raise DispatchRequestError("device_queue_full", "device action queue is full")
@@ -775,7 +779,10 @@ class CommandDispatcher:
             if current_action in {spec.action, None}:
                 facts.moving = True
         elif state == "idle":
-            facts.idle = True
+            # Local action audio can outlive the servo motion. Keep polling until
+            # both are idle so the next queued action or conversation cannot race
+            # a clip that is still using the shared decoder/speaker.
+            facts.idle = message.payload.get("sound_busy") is not True
 
     async def _advance_lifecycle(
         self,

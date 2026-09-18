@@ -13,7 +13,7 @@
 
 Phase 5语音链继续遵守这条边界：MQTT只承载TTS/listen等JSON信令，连续Opus仍走加密UDP；内部Message Bus只发布音频元数据和短期 `frame_ref`。三传输共同的身份、选择和命令路由见 `docs/DEVICE_TRANSPORT_CONTRACT.md`；火山ASR/TTS、PCM/Opus转换和完整数据流见 `docs/VOLCENGINE_SPEECH_INTEGRATION.md`。
 
-## 2. 固件2.0.5历史能力与2.0.11现状
+## 2. 固件2.0.5历史能力与2.0.15现状
 
 ### 已有能力
 
@@ -42,6 +42,10 @@ Phase 5语音链继续遵守这条边界：MQTT只承载TTS/listen等JSON信令�
 2026-09-18两台真机均已通过hello/heartbeat、状态与14动作查询、action/stop、双向隔离、相同ID重复投递、Server/Broker重启恢复和攻击性改配拒绝。控制消息继续保持QoS 0/non-retain；QoS 1仅保留为后续网络策略，不作为当前实现事实。
 
 `2.0.9-2.0.11`继续增加语音MVP能力：动作目录包含无舵机`laugh`，设备可上报精确VAD活动，按钮可在idle进入循环对话并在connecting/listening/speaking发送`goodbye`退出。`2.0.11`把`laugh`的`moving → idle`生命周期绑定到本地音频真实播放结束，避免Dispatcher错过瞬时动作状态并在15秒后安全stop。
+
+`2.0.12-2.0.13`只加固本地显示、调度与音量，不改变MQTT Topic或命令JSON：中央旧大眼区域替换为看山表情/动作图，顶部状态栏和底部聊天文字保持；动作任务优先级降低；输出音量先迁移到90，再根据真机反馈迁移到100。`test1.0`的Web批量动作仍在Server拆成多个精确单设备命令，不向MQTT发布通配动作。
+
+`2.0.14-2.0.15`把动作图绑定到本地动作任务真实生命周期，并增加正式`otto_conversation` start/stop与`conversation_control`能力。固件验证当前状态和本地动作/音效空闲后，必须先发送、缓存带相同ID的`otto_conversation_ack`，再异步执行可能阻塞的音频通道切换；重复ID只重放ACK。状态运行态新增display别名、`sound.busy/name`和输出音量，不改变Topic边界。
 
 `test0.9`的LLM工具桥不新增MQTT旁路：DeepSeek只产生内部结构化调用，Server固定当前语音`device_id`、校验动作目录与参数后，仍由Dispatcher编码为精确设备down Topic并等待既有ACK/moving/idle生命周期。模型不能提供Topic、MAC、transport或广播目标。
 
@@ -264,7 +268,7 @@ Config / Logging / MessageBus / Storage
 - Web受保护API只提供结构化device_id、action、parameters和显式confirmation，不接受MQTT Topic或原始JSON。
 - Dispatcher仅对online、mqtt、enabled、能力满足且动作目录/参数合法的设备创建命令；每设备普通动作有界串行，不同设备可并行。
 - Gateway将`device.action.execute.requested`编码为`otto_action`，将`device.stop.execute.requested`编码为`stop`；两者均发往精确单设备down Topic，QoS 0、`retain=false`，外部`id`为持久command ID。
-- SQLite记录`requested → published → accepted → moving → completed`及rejected/timeout/disconnected/failed终态；重启不重放未完成动作。
+- SQLite记录`requested → published → accepted → moving → completed`及rejected/timeout/disconnected/failed终态；已上报`sound.busy=true`时，即使舵机已idle也继续保持moving，直到音效排空。重启不重放未完成动作。
 - stop中断当前动作、取消尚未执行的同设备动作并优先下发；集群stop拆为每设备独立命令与结果。
 - ACK或完成超时不重发动作，而是标记timeout并排入安全stop；传输断开标记disconnected。
 - Phase 4C原始证据来自真实内嵌Broker与两个fake客户端；Phase 4E随后在固件2.0.6的EVA1/EVA2上通过stop、hello/heartbeat、14动作、隔离、相同ID重复投递与Server/Broker重启恢复。
@@ -276,10 +280,10 @@ Config / Logging / MessageBus / Storage
 ```text
 Wi-Fi: EVA1、EVA2和开发机位于同一局域网
 Master: master.local
-Firmware: EVA1当前2.0.11；EVA2当前2.0.9且关机；两台2.0.6 MQTT验收只保留为历史共同基线
+Firmware: EVA1当前2.0.15；EVA2当前2.0.9且关机；两台2.0.6 MQTT验收只保留为历史共同基线
 EVA1当前IP: 192.168.172.127（仅诊断）
 EVA2当前IP: 192.168.172.117（仅诊断）
-动作目录: 14个动作
+动作目录: EVA1当前15个（含laugh）；两台2.0.6历史共同基线为14个
 ```
 
 正式验收不得依赖上述IP固定不变。测试通过条件：

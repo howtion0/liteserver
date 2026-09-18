@@ -262,3 +262,23 @@
 - 验证：`uv lock --check`、Ruff、mypy strict（37个源码文件）和全量`144 passed`。常驻Runtime已恢复到HTTP 8081/MQTT 1883/UDP 8884并健康，诊断8080保留；未commit、未push、未运行正式CI。
 - 暂停点：代码工具链已完成。下一轮先让用户通过EVA1按钮和真实麦克风口述大笑/前进/后退，确认上屏、无成功复述和循环门禁，再在EVA2开机后补双设备隔离。
 - 固件恢复点：2.0.11源码已通过ESP-IDF 5.5.5复建并推送`howtion0/otto`的`codex/otto-portable@abb769f1d0f3d1c03fb7a6106bd7288f31c66a98`；镜像SHA256保持`4c4298363b621599ea11c8daba2dc3efbc644538666a9f10f7115ece49e200bf`。
+
+### 2026-09-19 / test1.0 / 多设备WebUI、看山表情与对话音量加固
+
+- 基线：`test0.9@a2c22fb144beece1676625c39deee2b7d223d9df`已与远端一致，GitHub Actions run `35384613680`的macOS/Windows jobs均成功；本轮创建`test1.0`，版本提升至0.5.0。
+- Web Gateway：新增1至16个显式device_id的批量动作与批量stop，跨设备并发、同设备仍串行，逐设备返回独立结果；空目标、重复目标、通配符、名称/IP和未确认请求均拒绝。新增按设备/session隔离的脱敏对话投影和`GET /api/v1/conversations`。
+- WebUI：新增设备多选、在线选择/清空、动作目录交集、前进/后退/转向/跳跃/摇摆/太空步/抖动/弯腰/大笑/复位快捷按钮、高级批量动作/stop确认、正式对话start/stop、Server运行状态和独立对话泳道；刷新或事件重连后从Server快照恢复。动作目录为空时自动执行受保护verify；本机新标签页可用仅限loopback且不进入HTTP的fragment装入控制令牌并立即清除地址栏。
+- WebUI入口加固：用户后续点击前进时，正式8081的命令表、Message Bus和MQTT均无新记录，EVA1同时保持online/idle，故边界确定在浏览器请求之前。本机仍有昨日下午遗留的8080诊断进程，且只读页面可见时旧UI没有持续区分控制授权，容易误判“已发送”。已精确停止该旧进程，只保留8081；新UI增加控制授权徽标、无/失效令牌时锁定mutation控件、401聚焦令牌框和常驻提交结果。
+- WebUI修复后真机复验：用户在重新授权的8081页面连续执行前进、抖动、弯腰和大笑，服务端逐条记录`webui:batch → accepted → moving → completed`，最终idle；显示遥测分别出现`action_walk`、`action_jitter`、`action_bend`、`action_laugh`并恢复`base_emotion`。随后三步`swing`在15.254秒触发`moving_or_idle_timeout`和安全stop，暴露生产完成门限短于合法动作；现提高到30秒，设备ACK门限仍为3秒。
+- 对话修复：真实DeepSeek曾先输出完整句子再返回工具，旧逻辑以`mixed_text_and_tool_call`失败；现改为未成句前缀丢弃，已提交完整句子先完成TTS并stop，再串行执行唯一工具。另一次笑声状态查询瞬时超时现会在总门限内重试；始终没有完整busy边沿仍失败关闭。
+- 音量：TTS Service在Opus编码前对24 kHz S16LE PCM应用可配置饱和增益并正确处理跨Provider块的半个采样。首轮1.5倍短句烟测为113,398 PCM字节、峰值30,365→32,768、RMS 4,338.5→6,412.2、饱和样本约0.32%；用户仍反馈偏小，最终生产配置改为2.0。
+- 固件：中央旧大眼GIF替换为21个看山对话表情与22个动作贴图描述符；顶部状态栏及底部ASR/回答文字不变，动作开始覆盖中央图，结束/stop恢复最近基础表情。动作任务优先级降至3，持久输出音量迁移至100。
+- ASR加固：03:45左右顺滑回合均在1.1至3.1秒收到火山partial；05:21故障轮已上传491个60 ms帧且VAD正常，却没有任何partial，旧逻辑因此等到30秒超时。ASR现以partial稳定或“已说话后VAD静音1.2秒”双端点竞争一次性收句并保留队列尾帧；真机复测在1.202秒触发`vad_silence`。火山随后返回空final暴露WakeGate卡在recognizing，已修为只笑一次并重开监听且不调用LLM，自动回归通过、真机恢复待复验。
+- 动作加固：Dispatcher把`sound_busy=true`纳入准入和完成判据，舵机先idle而本地OGG未排空时命令保持moving。WakeGate开场笑声若被`device_state_unsafe`拒绝，不再只查询一次或在idle+busy时空转，而是在有界截止时间内反复查询到action idle且sound非busy再提交。EVA1最短walk经正式批量API在91 ms收到ACK、5.31秒completed；随后用户从新WebUI真实完成两次3步前进、一次左转和一次太空步，同设备重叠点击保持串行。
+- 正式对话控制：固件2.0.15对`otto_conversation`先回关联ACK再异步切换可能阻塞的音频通道；EVA1真实start约104 ms接受并建立MQTT/UDP session，stop约19 ms接受并回waiting。
+- 构建与OTA：ESP-IDF 5.5.5完整构建2.0.15，镜像3,830,880字节，SHA256 `e1ca9051c8f6a2aac1bef3e47323c1927ef6bebc3b901ae52bc393f9ad4595e6`。EVA1 OTA后hello确认2.0.15，运行态确认音量100；Server健康状态确认TTS增益2.0、EVA1 MQTT online。
+- 固件提交：上述2.0.15源码已精确提交并推送到`howtion0/otto`的`codex/otto-portable@c6addc6a35bf54c6c28f07fde53828cd73bce1f0`；远端SHA复核一致，未推main、未创建tag。
+- 真机：正式Web控制已完成多种动作和对话start/stop，最终idle；EVA2保持关机，没有把fake双设备并发冒充真机双设备通过。动作图切换/恢复、修复后完整问答和2.0倍TTS的清晰度、卡顿、削波仍待用户主观确认。
+- 自动验证：首轮全量测试暴露旧`AudioConfig`直接构造缺省值和本机控制台令牌污染Runtime WebSocket测试，分别用安全unity回退和显式测试环境隔离修复；后续新增ASR双端点、空final、音效排空和WebUI授权回归。最终`uv lock --check`、Ruff、mypy strict（38个源码文件）、176项pytest、Node语法和`git diff --check`通过；正式test1.0 CI待最终提交/push。
+- 运行链路：EVA1继续使用“MQTT控制/信令 + AES-128-CTR UDP Opus → 本机Otto Master → 火山ASR/TTS + DeepSeek”，不是官方小智云后端。
+- 排除：根目录用户`README.md`、`.DS_Store`、贴图源目录与ZIP、`.env`、数据库、日志、构建输出和固件二进制不进入提交；密钥未写入文档或Git差异。

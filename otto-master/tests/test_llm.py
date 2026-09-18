@@ -12,6 +12,7 @@ from otto_master.gateways.cloud import (
 )
 from otto_master.services.llm import (
     LlmProtocolError,
+    LlmSentence,
     LlmService,
     LlmToolCall,
     SentenceSegmenter,
@@ -262,7 +263,7 @@ async def test_tool_result_does_not_turn_the_next_action_into_plain_text_history
 
 
 @pytest.mark.asyncio
-async def test_llm_service_rejects_mixed_text_and_tool_call() -> None:
+async def test_llm_service_discards_unspoken_text_preamble_before_tool_call() -> None:
     class MixedProvider:
         async def stream_chat_events(
             self,
@@ -285,13 +286,56 @@ async def test_llm_service_rejects_mixed_text_and_tool_call() -> None:
             )
 
     service = LlmService(MixedProvider())
-    with pytest.raises(LlmProtocolError, match="mixed_text_and_tool_call"):
-        _ = [
-            item
-            async for item in service.stream_turn("eva1", "走", tools=[_walk_tool()])
-        ]
+    output = [
+        item async for item in service.stream_turn("eva1", "走", tools=[_walk_tool()])
+    ]
 
+    assert output == [
+        LlmToolCall(
+            call_id="call-walk",
+            name="self_otto_walk_forward",
+            arguments={},
+        )
+    ]
     assert service.history("eva1") == ()
+    assert service.status()["tool_preambles_discarded"] == 1
+
+
+@pytest.mark.asyncio
+async def test_llm_service_orders_spoken_sentence_before_one_tool_call() -> None:
+    class SpokenThenToolProvider:
+        async def stream_chat_events(
+            self,
+            messages: Sequence[ChatMessage],
+            *,
+            tools: Sequence[ChatToolDefinition] = (),
+            tool_choice: str = "auto",
+        ) -> AsyncIterator[ChatStreamChunk]:
+            yield ChatStreamChunk(content="好的。")
+            yield ChatStreamChunk(
+                tool_calls=(
+                    ChatToolCallDelta(
+                        index=0,
+                        call_id="call-walk",
+                        name="self_otto_walk_forward",
+                        arguments="{}",
+                    ),
+                ),
+                finish_reason="tool_calls",
+            )
+
+    service = LlmService(SpokenThenToolProvider())
+    output = [
+        item async for item in service.stream_turn("eva1", "走", tools=[_walk_tool()])
+    ]
+
+    assert output == [
+        LlmSentence("好的。"),
+        LlmToolCall("call-walk", "self_otto_walk_forward", {}),
+    ]
+    assert service.history("eva1") == ()
+    assert service.status()["tool_preambles_discarded"] == 0
+    assert service.status()["tool_preambles_spoken"] == 1
 
 
 @pytest.mark.asyncio

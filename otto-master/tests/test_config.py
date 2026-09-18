@@ -30,6 +30,8 @@ def test_repository_config_loads_without_exposing_secret_values() -> None:
     assert "你叫奶龙" in config.cloud.llm.system_prompt
     assert config.cloud.tts.speaker == "zh_female_wanqudashu_moon_bigtts"
     assert config.cloud.tts.resource_id == "volc.service_type.10029"
+    assert config.audio.tts_pcm_gain == 2.0
+    assert config.ota.firmware_version == "2.0.15"
     assert config.mqtt.enabled is True
     assert config.mqtt.port == 1883
     assert config.mqtt.heartbeat_stale_seconds == 15
@@ -37,7 +39,7 @@ def test_repository_config_loads_without_exposing_secret_values() -> None:
     assert config.mqtt.query_timeout_seconds == 3
     assert config.dispatch.queue_size_per_device == 16
     assert config.dispatch.ack_timeout_seconds == 3
-    assert config.dispatch.completion_timeout_seconds == 15
+    assert config.dispatch.completion_timeout_seconds == 30
     assert config.dispatch.state_query_interval_seconds == 1
     assert config.tcp.enabled is False
     assert config.tcp.port == 8765
@@ -89,4 +91,22 @@ def test_transport_configuration_rejects_unsafe_bounds(
     target.write_text(contents.replace(original, invalid, 1), encoding="utf-8")
 
     with pytest.raises(ConfigError, match=error):
+        load_config(target)
+
+
+@pytest.mark.parametrize("invalid", ["0.24", "4.01", ".nan", ".inf"])
+def test_tts_pcm_gain_rejects_out_of_range_or_non_finite_values(
+    tmp_path: Path,
+    invalid: str,
+) -> None:
+    source = Path(__file__).parents[1] / "config.yaml"
+    target = tmp_path / "config.yaml"
+    contents = source.read_text(encoding="utf-8")
+    assert "  tts_pcm_gain: 2.0" in contents
+    target.write_text(
+        contents.replace("  tts_pcm_gain: 2.0", f"  tts_pcm_gain: {invalid}", 1),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ConfigError, match="audio.tts_pcm_gain"):
         load_config(target)

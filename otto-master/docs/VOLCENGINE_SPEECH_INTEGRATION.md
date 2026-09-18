@@ -1,6 +1,6 @@
 # Phase 5 火山引擎语音接入设计
 
-本文档冻结 Otto Master Phase 5 的 ASR、TTS、Opus 数据流、云协议、复用边界和验收标准，并记录 `test0.9` 已完成的单机纵向实现。EVA1 的 MQTT+加密UDP真实闭环已经通过；双设备、双Profile和Windows打包矩阵仍未完成。
+本文档冻结 Otto Master Phase 5 的 ASR、TTS、Opus 数据流、云协议、复用边界和验收标准，并记录 `test0.9` 已完成的单机纵向实现及`test1.0`音量加固。EVA1 的 MQTT+加密UDP真实闭环已经通过；双设备、双Profile和Windows打包矩阵仍未完成。
 
 ## 1. 当前结论
 
@@ -12,7 +12,7 @@
 | TTS传输 | 单向流式 HTTP：`https://openspeech.bytedance.com/api/v3/tts/unidirectional` |
 | 鉴权 | 新控制台 API Key，通过 `X-Api-Key` 发送；密钥只从环境变量读取 |
 | 运行时依赖 | 复用现有 `websockets`、`httpx`、`opuslib-next`，不增加FFmpeg、pydub或numpy运行时依赖 |
-| 实现状态 | Cloud/ASR/LLM/TTS/WakeGate、MQTT+AES-CTR UDP Opus和EVA1真机闭环已实现；完整Phase 5矩阵仍进行中 |
+| 实现状态 | Cloud/ASR/LLM/TTS/WakeGate、MQTT+AES-CTR UDP Opus、可配置PCM增益和EVA1真机闭环已实现；完整Phase 5矩阵仍进行中 |
 
 当前账号调用 ASR 2.0 资源 `volc.seedasr.sauc.duration` 返回 403；相同 API Key 对 ASR 1.0 和 TTS 均成功。因此 Phase 5 先把它视为“ASR 2.0资源未授权或未开通”，不能误判为密钥整体无效。以后控制台开通 2.0 后，只允许通过配置切换资源ID，不改变内部消息合同。
 
@@ -62,6 +62,21 @@
 - 2.0.11让无舵机`laugh`保持动作`moving`直到本地音频真正结束，修复Dispatcher因错过瞬时moving而占住命令15秒、进而取消下一轮笑声的问题；新的不同session也可从失败状态自恢复。
 - EVA1真机完成一次真实回答后的第二轮笑声和监听；连续两个独立门禁均观测完整忙闲边沿，另一次监听在8秒静默后`idle_timeout`退出且UDP sessions=0。
 
+### 2.5 `test1.0` TTS响度加固
+
+- TTS Service在Opus编码前对火山返回的24 kHz单声道S16LE PCM应用`audio.tts_pcm_gain`。每个样本四舍五入并饱和到`[-32768, 32767]`，不得发生整数回绕；任意HTTP块边界拆开的单个字节会保留到下一块，最终残留半个采样视为Provider协议错误。
+- 首轮真实短句在1.5倍时得到113,398字节PCM、约2.362秒音频；峰值从30,365升到32,768，RMS从4,338.5升到6,412.2，182个样本发生饱和，约占0.32%。这些数字仅描述该短句，不外推为所有文本的响度或削波比例。
+- 用户仍反馈1.5倍和设备音量90偏小，因此生产配置调整为2.0，EVA1固件2.0.13把持久输出音量迁移到100；当前2.0.15继续保留该档位。OTA后hello已报告`firmware_version=2.0.15`，心跳运行态报告`output_volume=100`，Server健康状态报告`pcm_gain=2.0`。
+- 2.0倍的最终清晰度、卡顿和明显削波仍以用户真机试听为准，未确认前不能标记主观验收PASS。若出现破音，应改用压缩/限幅策略，不继续提高硬增益。
+
+### 2.6 `test1.0` ASR端点与动作音效时序加固
+
+- 03:43至03:47左右的“丝滑”实测中，每个有效utterance都在开始后约1.1至3.1秒收到火山partial；最后一条partial稳定1.2秒后收句，云端final再用约0.1至0.33秒返回。DeepSeek开始生成到首段TTS播放约0.6至1.1秒，因此用户感知为连续响应。
+- 05:21故障轮并非麦克风距离问题：EVA1上传491个60 ms Opus帧（约29.5秒），设备VAD持续上报且UDP只出现少量序号缺口，但火山没有返回任何partial。旧实现只靠partial稳定收句，最终等到30秒云超时。
+- ASR现同时订阅当前utterance的VAD：只有先观测到`speaking=true`，再连续1.2秒`false`才走`vad_silence`端点；新的`true`会取消待定端点。收句前先禁止新帧，队列中已接收尾帧全部送完，避免截断末字。
+- 首次真机复测在最后一次`false`后1.202秒触发`vad_silence`，148 ms后火山返回空final，证明30秒悬挂已消除，也暴露旧WakeGate会停在`recognizing`。现对空final执行一次本地大笑并重新开放监听，不调用LLM、不增加turn、不因重复final重复动作；该恢复分支已有自动回归，仍需下一次真机语音回合复验。
+- Dispatcher把设备`sound_busy=true`同时纳入新动作准入和完成判据。动作舵机已idle但本地OGG仍播放时，持久命令继续保持moving；只有`action_state=idle`且`sound_busy!=true`才completed，旧固件未上报该字段时保持兼容。WakeGate开场笑声遇到`device_state_unsafe`时也反复查询这两个条件，不把一次idle快照误当作共享音频解码器已经空闲。
+
 ## 3. 端到端数据流
 
 ### 3.1 设备语音上行到ASR
@@ -90,6 +105,7 @@ tts.synthesis.requested
   → TTS Service校验文本、设备和音色
   → Cloud Gateway发起火山TTS流式HTTP
   → 直接接收24 kHz / mono / S16LE PCM
+  → 按audio.tts_pcm_gain逐样本放大并饱和钳位
   → Opus Encoder按60 ms滚动切帧
   → tts start
   → tts sentence_start
@@ -102,7 +118,7 @@ tts.synthesis.requested
   → 设备回到idle
 ```
 
-24 kHz、单声道、16-bit PCM的一个60 ms帧是1440个采样点、2880字节。编码器必须保留跨HTTP块的尾部数据，凑满一帧再编码；流结束时只补齐最后一帧。
+24 kHz、单声道、16-bit PCM的一个60 ms帧是1440个采样点、2880字节。增益器必须先保留跨HTTP块拆开的半个S16LE采样；编码器再保留跨块的PCM尾部，凑满一帧后编码，流结束时只补齐最后一帧。
 
 TTS控制JSON沿用小智固件已经识别的顺序：
 
@@ -201,7 +217,7 @@ Message Bus只传递控制事实、结果和音频引用，禁止在普通Messag
 }
 ```
 
-TTS Service发布 `tts.synthesis.started`，经内部有界队列把PCM转换为有序Opus帧并交给当前Profile的播放对象，单句结束发布 `tts.synthesis.completed`。`tts.synthesis.completed`只表示该句合成与编码结束；当前`tts.playback.finished`表示服务端已按60 ms节奏发完全部帧并成功发出`stop`，仍不等于扬声器物理播放ACK。
+TTS Service发布 `tts.synthesis.started`，经内部有界队列对PCM应用配置增益，再转换为有序Opus帧并交给当前Profile的播放对象，单句结束发布 `tts.synthesis.completed`。`tts.synthesis.completed`只表示该句合成与编码结束；当前`tts.playback.finished`表示服务端已按60 ms节奏发完全部帧并成功发出`stop`，仍不等于扬声器物理播放ACK。
 
 ## 6. 火山协议边界
 
@@ -284,7 +300,11 @@ cloud:
     speaker: zh_female_wanqudashu_moon_bigtts
     sample_rate: 24000
     format: pcm
+audio:
+  tts_pcm_gain: 2.0
 ```
+
+`tts_pcm_gain`允许范围为`0.25..4.0`且必须是有限数值。它只影响云TTS PCM，不二次放大固件本地笑声或动作音效；运行状态公开当前数值，方便确认实际生效配置。
 
 ASR和TTS当前可以在本机 `.env` 中使用同一个火山项目API Key值，但仍保留两个环境变量名，便于以后分项目、分权限和轮换。禁止把密钥放入 `config.yaml`、WebUI、OTA响应、ESP32固件或测试夹具。
 
@@ -292,6 +312,7 @@ ASR和TTS当前可以在本机 `.env` 中使用同一个火山项目API Key值�
 
 - 每台设备同一时刻只允许一个活动ASR utterance和一个TTS播放会话；不同设备可并发。
 - 当前45秒对话窗口下有界队列为ASR 750帧、LLM 4项、TTS句子4/PCM 16/Opus 48；各阶段是独立生产者/消费者，队列满或消费者失败必须取消上游并清理。
+- ASR端点同时接受云partial稳定和设备VAD静音事实，但两者竞争同一个一次性输入关闭权；任何迟到帧、重复端点或过期utterance只能丢弃，不能建立第二个云请求。
 - 云请求使用全局并发信号量，具体上限从配置读取；达到上限进入短有界队列，队列满则明确失败。
 - ASR连接建立前可以重试；音频开始上传后默认不重放整段，避免重复结果和内存膨胀。
 - TTS只有在首个音频块发送前可以重试；发送后失败必须stop并报告部分播放失败。

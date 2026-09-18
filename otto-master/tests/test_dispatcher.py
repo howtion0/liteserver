@@ -161,12 +161,17 @@ async def _state(
     outbound: Message,
     state: str,
     action: str | None,
+    *,
+    sound_busy: bool | None = None,
 ) -> None:
+    payload: dict[str, JsonValue] = {"action_state": state, "current_action": action}
+    if sound_busy is not None:
+        payload["sound_busy"] = sound_busy
     await _publish(
         bus,
         outbound,
         topic="device.state.received",
-        payload={"action_state": state, "current_action": action},
+        payload=payload,
     )
 
 
@@ -309,6 +314,44 @@ async def test_different_device_workers_execute_in_parallel(tmp_path: Path) -> N
         await _wait_status(repository, "eva2-command", "completed")
     finally:
         release.set()
+        await _close(database, bus, dispatcher)
+
+
+@pytest.mark.asyncio
+async def test_action_completion_waits_for_local_sound_to_finish(tmp_path: Path) -> None:
+    database, bus, repository, dispatcher, _ = await _start(tmp_path)
+    motion_finished = asyncio.Event()
+    release_sound = asyncio.Event()
+
+    async def handle_action(message: Message) -> None:
+        await _published(bus, message)
+        await _action_accepted(bus, message)
+        await _state(bus, message, "moving", "swing", sound_busy=True)
+        await _state(bus, message, "idle", None, sound_busy=True)
+        motion_finished.set()
+        await release_sound.wait()
+        await _state(bus, message, "idle", None, sound_busy=False)
+
+    await _subscribe_outbound(bus, action=handle_action)
+    try:
+        await dispatcher.submit_action(
+            device_id="aabbccddee01",
+            action="swing",
+            parameters={"steps": 2},
+            confirmation=True,
+            command_id="sound-drain-action",
+        )
+        await asyncio.wait_for(motion_finished.wait(), timeout=1)
+        await asyncio.sleep(0.05)
+        command = await repository.get("sound-drain-action")
+        assert command is not None
+        assert command["status"] == "moving"
+
+        release_sound.set()
+        completed = await _wait_status(repository, "sound-drain-action", "completed")
+        assert completed["history"][-1]["status"] == "completed"
+    finally:
+        release_sound.set()
         await _close(database, bus, dispatcher)
 
 

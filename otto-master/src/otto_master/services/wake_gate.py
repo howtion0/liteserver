@@ -340,10 +340,17 @@ class WakeGateService:
     async def _on_transcription_completed(self, message: Message) -> None:
         identity = _audio_identity(message)
         text = message.payload.get("text")
-        if identity is None or not isinstance(text, str) or not text.strip():
+        if identity is None or not isinstance(text, str):
             return
         device_id, session_id, utterance_id = identity
         prompt = text.strip()[: self.transcription_max_chars].rstrip()
+        if not prompt:
+            await self._restart_after_empty_transcription(
+                device_id,
+                session_id,
+                utterance_id,
+            )
+            return
         idle_task: asyncio.Task[None] | None = None
         async with self._lock:
             conversation = self._conversations.get(device_id)
@@ -373,6 +380,51 @@ class WakeGateService:
             await asyncio.gather(idle_task, return_exceptions=True)
         await self.asr.close_device_input(device_id, cancel_active=False)
         await self._publish_state(device_id, ConversationState.ANSWERING)
+
+    async def _restart_after_empty_transcription(
+        self,
+        device_id: str,
+        session_id: str,
+        utterance_id: str,
+    ) -> None:
+        """Laugh once and reopen listening when ASR returns no usable text."""
+
+        idle_task: asyncio.Task[None] | None = None
+        round_id: str | None = None
+        conversation: _Conversation | None = None
+        async with self._lock:
+            conversation = self._conversations.get(device_id)
+            if (
+                conversation is None
+                or conversation.state is not ConversationState.RECOGNIZING
+                or conversation.session_id != session_id
+                or conversation.utterance_id != utterance_id
+            ):
+                return
+            idle_task = conversation.idle_task
+            conversation.idle_task = None
+            conversation.state = ConversationState.LAUGHING
+            conversation.utterance_id = None
+            conversation.round_id = str(uuid4())
+            round_id = conversation.round_id
+            conversation.speech_detected = False
+            conversation.task = None
+        if idle_task is not None:
+            idle_task.cancel()
+            await asyncio.gather(idle_task, return_exceptions=True)
+        await self.asr.close_device_input(device_id, cancel_active=False)
+        await self._publish_state(device_id, ConversationState.LAUGHING)
+        async with self._lock:
+            if (
+                conversation.state is not ConversationState.LAUGHING
+                or conversation.session_id != session_id
+                or conversation.round_id != round_id
+            ):
+                return
+            conversation.task = asyncio.create_task(
+                self._run_laughter_gate(conversation, session_id),
+                name=f"otto-empty-transcription-{device_id}",
+            )
 
     async def _on_transcription_partial(self, message: Message) -> None:
         await self._mark_speech_activity(message)
@@ -548,7 +600,6 @@ class WakeGateService:
 
         deadline = asyncio.get_running_loop().time() + self.query_timeout_seconds
         catalog_refreshed = False
-        state_refreshed = False
         while True:
             try:
                 await submit()
@@ -565,11 +616,16 @@ class WakeGateService:
                         raise RuntimeError("laughter_action_not_supported") from exc
                     catalog_refreshed = True
                     continue
-                if code == "device_state_unsafe" and not state_refreshed:
-                    state = await self._query_state(conversation)
-                    if state.payload.get("action_state") != "idle":
+                if code == "device_state_unsafe":
+                    if asyncio.get_running_loop().time() >= deadline:
                         raise
-                    state_refreshed = True
+                    state = await self._query_state(conversation)
+                    action_idle = state.payload.get("action_state") == "idle"
+                    sound_idle = state.payload.get("sound_busy") is not True
+                    if not action_idle or not sound_idle:
+                        if asyncio.get_running_loop().time() >= deadline:
+                            raise
+                        await asyncio.sleep(self.query_interval_seconds)
                     continue
                 if code not in {"action_not_supported", "device_state_unsafe"}:
                     raise
@@ -584,7 +640,13 @@ class WakeGateService:
         deadline = asyncio.get_running_loop().time() + self.laughter_timeout_seconds
         observed_busy = False
         while asyncio.get_running_loop().time() < deadline:
-            state = await self._query_state(conversation)
+            try:
+                state = await self._query_state(conversation)
+            except RuntimeError as exc:
+                if str(exc) != "laughter_state_query_timeout":
+                    raise
+                await asyncio.sleep(self.query_interval_seconds)
+                continue
             busy = state.payload.get("sound_busy")
             if busy is True:
                 observed_busy = True
@@ -740,13 +802,20 @@ class WakeGateService:
             raise LlmProtocolError("empty_llm_response") from exc
 
         if isinstance(first, LlmSentence):
+            pending_tool: LlmToolCall | None = None
 
             async def sentences() -> AsyncIterable[str]:
+                nonlocal pending_tool
                 yield first.text
                 async for item in iterator:
-                    if not isinstance(item, LlmSentence):
-                        raise LlmProtocolError("mixed_text_and_tool_call")
-                    yield item.text
+                    if isinstance(item, LlmSentence):
+                        if pending_tool is not None:
+                            raise LlmProtocolError("mixed_text_and_tool_call")
+                        yield item.text
+                        continue
+                    if pending_tool is not None:
+                        raise LlmProtocolError("multiple_tool_calls_not_allowed")
+                    pending_tool = item
 
             text_playback = await self.tts.play_sentences(
                 conversation.device_id,
@@ -755,29 +824,55 @@ class WakeGateService:
             )
             if text_playback.session_id != session_id:
                 raise RuntimeError("device_session_changed")
-            return False
+            if pending_tool is None:
+                return False
+            return await self._execute_tool_turn(
+                conversation,
+                session_id,
+                prompt,
+                utterance_id,
+                pending_tool,
+            )
 
         extra = await anext(iterator, None)
         if extra is not None:
             raise LlmProtocolError("multiple_tool_calls_not_allowed")
+        return await self._execute_tool_turn(
+            conversation,
+            session_id,
+            prompt,
+            utterance_id,
+            first,
+        )
+
+    async def _execute_tool_turn(
+        self,
+        conversation: _Conversation,
+        session_id: str,
+        prompt: str,
+        utterance_id: str,
+        tool_call: LlmToolCall,
+    ) -> bool:
+        if self.robot_tools is None:
+            raise RuntimeError("robot_tools_unavailable")
         await self._publish_tool_event(
             conversation,
             session_id,
             utterance_id,
-            first,
+            tool_call,
             topic="voice.tool.requested",
         )
         try:
             tool_result = await self.robot_tools.execute(
                 conversation.device_id,
-                first,
+                tool_call,
                 correlation_id=utterance_id,
             )
         except RobotToolError as exc:
             await self.llm.record_tool_result(
                 conversation.device_id,
                 prompt,
-                first,
+                tool_call,
                 success=False,
                 result_code=exc.code,
             )
@@ -785,7 +880,7 @@ class WakeGateService:
                 conversation,
                 session_id,
                 utterance_id,
-                first,
+                tool_call,
                 topic="voice.tool.failed",
                 error_code=exc.code,
             )
@@ -801,7 +896,7 @@ class WakeGateService:
         await self.llm.record_tool_result(
             conversation.device_id,
             prompt,
-            first,
+            tool_call,
             success=True,
             result_code=tool_result.status,
         )
@@ -809,7 +904,7 @@ class WakeGateService:
             conversation,
             session_id,
             utterance_id,
-            first,
+            tool_call,
             topic="voice.tool.completed",
             result=tool_result,
         )

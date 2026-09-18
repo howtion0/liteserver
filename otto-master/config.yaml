@@ -28,7 +28,7 @@ mqtt:
 dispatch:
   queue_size_per_device: 16
   ack_timeout_seconds: 3
-  completion_timeout_seconds: 15
+  completion_timeout_seconds: 30
   state_query_interval_seconds: 1
 
 tcp:
@@ -77,6 +77,7 @@ audio:
   channels: 1
   frame_duration_ms: 60
   format: opus
+  tts_pcm_gain: 2.0
 
 wake:
   command_timeout_seconds: 6
@@ -135,7 +136,7 @@ cloud:
 ota:
   enabled: true
   firmware_path: firmware/xiaozhi.bin
-  firmware_version: 2.0.11
+  firmware_version: 2.0.15
   target_hardware: esp32s3-otto
   provisioning_token_env: OTTO_PROVISIONING_TOKEN
 

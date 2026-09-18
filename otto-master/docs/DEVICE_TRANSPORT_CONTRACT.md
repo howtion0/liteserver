@@ -170,7 +170,7 @@ Otto状态、动作目录、查询、动作、stop及ACK作为同一文本通道
 
 ## 8. 当前验收边界
 
-`0.4.3` 使用真实loopback TCP、HTTP/WebSocket和内嵌MQTT Broker配合fake设备验证协议、鉴权、隔离、动作/stop生命周期和资源释放。Phase 4E又在EVA1/EVA2固件`2.0.6`上验证了真实MQTT hello/heartbeat、14动作查询、action/stop、6步walk、双机隔离、重复ID和Server/Broker重启恢复。`test0.9`进一步在EVA1固件`2.0.11`上完成MQTT信令、AES-CTR UDP Opus、ASR/TTS、循环WakeGate和单设备LLM工具链。尚未完成：
+`0.4.3` 使用真实loopback TCP、HTTP/WebSocket和内嵌MQTT Broker配合fake设备验证协议、鉴权、隔离、动作/stop生命周期和资源释放。Phase 4E又在EVA1/EVA2固件`2.0.6`上验证了真实MQTT hello/heartbeat、14动作查询、action/stop、6步walk、双机隔离、重复ID和Server/Broker重启恢复。`test0.9`进一步在EVA1固件`2.0.11`上完成MQTT信令、AES-CTR UDP Opus、ASR/TTS、循环WakeGate和单设备LLM工具链；`0.5.0/test1.0`把EVA1升级到2.0.15，并增加Server端显式多设备批量控制、每设备对话投影和正式会话start/stop。连续Opus仍不走Message Bus或MQTT控制Topic，协议边界未改变。尚未完成：
 
 - EVA2语音/工具链和两台设备并发会话隔离。
 - EVA1/EVA2的WebSocket语音Profile真机验收。

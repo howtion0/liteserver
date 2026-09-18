@@ -2,15 +2,16 @@ from __future__ import annotations
 
 import asyncio
 import json
+import struct
 from collections.abc import AsyncIterator
 
 import pytest
 
-from otto_master.audio.opus import OpusFrameDecoder, OpusParameters
+from otto_master.audio.opus import OpusFrameDecoder, OpusParameters, StreamingOpusEncoder
 from otto_master.gateways.cloud import CloudProviderError
 from otto_master.message_bus import MessageBus
 from otto_master.messages import Message
-from otto_master.services.tts import TtsService
+from otto_master.services.tts import TtsService, apply_pcm_gain
 
 
 class FakePlayback:
@@ -81,6 +82,34 @@ class FakeTtsProvider:
 async def _sentences(*values: str) -> AsyncIterator[str]:
     for value in values:
         yield value
+
+
+def test_pcm_gain_scales_s16le_and_saturates_without_wrapping() -> None:
+    pcm = struct.pack("<hhhhhhh", 0, 1, -1, 10_000, -10_000, 30_000, -30_000)
+
+    amplified = apply_pcm_gain(pcm, 1.5)
+
+    assert struct.unpack("<hhhhhhh", amplified) == (
+        0,
+        2,
+        -2,
+        15_000,
+        -15_000,
+        32_767,
+        -32_768,
+    )
+    assert apply_pcm_gain(pcm, 1.0) is pcm
+
+
+@pytest.mark.parametrize("gain", [0.0, 4.1, float("nan"), float("inf")])
+def test_pcm_gain_rejects_invalid_gain(gain: float) -> None:
+    with pytest.raises(ValueError, match="PCM gain"):
+        apply_pcm_gain(b"\x00\x00", gain)
+
+
+def test_pcm_gain_rejects_incomplete_sample() -> None:
+    with pytest.raises(ValueError, match="complete S16LE"):
+        apply_pcm_gain(b"\x00", 1.5)
 
 
 @pytest.mark.asyncio
@@ -277,3 +306,45 @@ async def test_tts_sentence_producer_runs_while_pcm_provider_is_blocked() -> Non
         "pcm_queue_size": 1,
         "opus_queue_size": 1,
     }
+
+
+@pytest.mark.asyncio
+async def test_tts_gain_preserves_samples_split_across_provider_chunks() -> None:
+    pcm = struct.pack("<hhhh", 1_000, -1_000, 30_000, -30_000)
+    provider = FakeTtsProvider({"放大。": [pcm[:3], pcm[3:5], pcm[5:]]})
+    sink = FakeSink()
+    bus = MessageBus()
+    service = TtsService(bus, sink, provider, pcm_gain=1.5, pace_audio=False)
+
+    await bus.start()
+    try:
+        result = await service.play_sentences("eva000000001", _sentences("放大。"))
+    finally:
+        await bus.stop()
+
+    packet = next(value for kind, value in sink.events if kind == "audio")
+    expected_encoder = StreamingOpusEncoder(OpusParameters(24_000))
+    expected_packets = (
+        *expected_encoder.feed(apply_pcm_gain(pcm, 1.5)),
+        *expected_encoder.finish(),
+    )
+    assert packet == expected_packets[0]
+    assert result.frame_count == 1
+    assert service.status()["pcm_gain"] == 1.5
+
+
+@pytest.mark.asyncio
+async def test_tts_rejects_provider_with_incomplete_final_sample_and_stops() -> None:
+    provider = FakeTtsProvider({"坏数据。": [b"\x01"]})
+    sink = FakeSink()
+    bus = MessageBus()
+    service = TtsService(bus, sink, provider, pcm_gain=1.5, pace_audio=False)
+
+    await bus.start()
+    try:
+        with pytest.raises(ValueError, match="incomplete S16LE"):
+            await service.play_sentences("eva000000001", _sentences("坏数据。"))
+    finally:
+        await bus.stop()
+
+    assert [kind for kind, _ in sink.events] == ["start", "sentence", "stop"]

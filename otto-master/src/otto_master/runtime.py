@@ -36,6 +36,7 @@ from .gateways.mqtt_broker import EmbeddedMqttBroker
 from .gateways.web import EventHub, WebContext, WebGateway
 from .message_bus import MessageBus
 from .services.asr import AsrService
+from .services.conversation_control import ConversationControlService
 from .services.llm import LlmService
 from .services.robot_tools import RobotToolBridge
 from .services.tts import TtsService
@@ -112,6 +113,11 @@ class Runtime:
             transport_status=self._transport_status,
             timeout_seconds=config.mqtt.query_timeout_seconds,
         )
+        self.conversation_control = ConversationControlService(
+            self.message_bus,
+            self.device_manager,
+            timeout_seconds=config.mqtt.query_timeout_seconds,
+        )
         self.command_repository = CommandRepository(self.database)
         self.dispatcher = CommandDispatcher(
             self.message_bus,
@@ -146,6 +152,7 @@ class Runtime:
                 devices=self.device_manager,
                 verifier=self.device_verifier,
                 dispatcher=self.dispatcher,
+                conversation_control=self.conversation_control,
                 component_status=self.component_status,
                 started_at=self._started_at,
                 started_monotonic=self._started_monotonic,
@@ -185,6 +192,7 @@ class Runtime:
             await self.mqtt_broker.start()
             await self.device_manager.start()
             await self.device_verifier.start()
+            await self.conversation_control.start()
             await self.dispatcher.start()
             await self.device_udp.start()
             await self.device_mqtt.start()
@@ -258,6 +266,9 @@ class Runtime:
                 await self._stop_with_timeout(self.wake_gate.shutdown(), "wake gate")
             if self.asr_service is not None:
                 await self._stop_with_timeout(self.asr_service.shutdown(), "ASR service")
+            await self._stop_with_timeout(
+                self.conversation_control.shutdown(), "conversation control"
+            )
             await self._stop_with_timeout(self.device_verifier.shutdown(), "device verifier")
             await self._stop_with_timeout(self.dispatcher.shutdown(), "dispatcher")
             await self._stop_with_timeout(
@@ -315,6 +326,7 @@ class Runtime:
                 "devices": self.device_manager.device_count,
             },
             "device_verifier": self.device_verifier.status(),
+            "conversation_control": self.conversation_control.status(),
             "dispatcher": self.dispatcher.status(),
             "voice_mvp": self._voice_status(),
             "web": self.web.status(),
@@ -343,6 +355,9 @@ class Runtime:
                 await self._stop_with_timeout(self.wake_gate.shutdown(), "wake gate")
             if self.asr_service is not None:
                 await self._stop_with_timeout(self.asr_service.shutdown(), "ASR service")
+            await self._stop_with_timeout(
+                self.conversation_control.shutdown(), "conversation control"
+            )
             await self._stop_with_timeout(self.device_verifier.shutdown(), "device verifier")
             await self._stop_with_timeout(self.dispatcher.shutdown(), "dispatcher")
             await self._stop_with_timeout(
@@ -488,6 +503,7 @@ class Runtime:
             sample_rate=config.audio.output_sample_rate,
             channels=config.audio.channels,
             frame_duration_ms=config.audio.frame_duration_ms,
+            pcm_gain=config.audio.tts_pcm_gain,
         )
         self.llm_service = LlmService(
             self.cloud_llm,

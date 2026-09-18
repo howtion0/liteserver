@@ -215,7 +215,7 @@ Phase 4A检查点（`test0.4`）只完成不移动设备的上行联调端：
 
 ## Phase 5：Opus与云端ASR/TTS
 
-目标：打通语音上行和语音回传。Phase 5原始边界只包含LLM文本问答；`test0.9`为最快纵向MVP提前拉入了Phase 7的“当前语音设备单工具”安全切片，但没有开放分组或广播自然语言控制。
+目标：打通语音上行和语音回传。Phase 5原始边界只包含LLM文本问答；`test0.9`为最快纵向MVP提前拉入了Phase 7的“当前语音设备单工具”安全切片，`test1.0`再补多设备Web控制面，但没有开放广播自然语言控制。
 
 Provider和协议已经通过独立烟测冻结；`test0.9`又完成EVA1的MQTT+加密UDP单机纵向MVP。完整设计、数据流、实测证据和剩余范围见 `docs/VOLCENGINE_SPEECH_INTEGRATION.md`。单机闭环不等于双设备、双Profile和Windows门禁全部完成。
 
@@ -225,7 +225,7 @@ Provider和协议已经通过独立烟测冻结；`test0.9`又完成EVA1的MQTT+
 2. 按 `device_id + utterance_id` 建立有界、短生命周期音频数据面；Message Bus只传元数据和 `frame_ref`，不传或持久化原始音频。
 3. 在 `gateways/cloud.py` 接入火山当前API Key鉴权、ASR二进制WebSocket协议和TTS流式HTTP，并把Provider错误转换为稳定内部错误。
 4. 在 `services/asr.py` 实现火山ASR 1.0时长版适配器和fake provider；输入为16 kHz PCM，输出partial/final/failed规范消息。
-5. 在 `services/tts.py` 实现火山TTS 2.0适配器和fake provider；直接请求24 kHz PCM，再编码为60 ms Opus，避免MP3和FFmpeg转码链。
+5. 在 `services/tts.py` 实现火山TTS 2.0适配器和fake provider；直接请求24 kHz PCM，应用可配置S16LE饱和增益后再编码为60 ms Opus，避免MP3和FFmpeg转码链。
 6. 严格实现 `tts start → sentence_start → Opus frames → stop`；start后任何失败、断开或取消都在清理路径尝试stop。
 7. MQTT Profile使用现有加密UDP Opus，WebSocket Profile使用二进制Opus；两者共享相同内部音频和TTS状态合同。
 8. 当前没有独立`tts_finished`；发送端按60 ms节奏完成全部帧并发出`tts stop`后，循环模式重新执行本地笑声门禁并开放下一条utterance。只有8秒静默、按钮退出或失败才关闭session。
@@ -250,7 +250,21 @@ Provider和协议已经通过独立烟测冻结；`test0.9`又完成EVA1的MQTT+
 12. DeepSeek请求携带由当前设备动作目录收窄得到的`tools/tool_choice`，流式组装至多一个`tool_call`；目标设备锁定当前语音session，参数经Schema再次校验后只通过现有Dispatcher执行。成功动作不追加TTS，失败只播固定失败提示，显式`laugh`完成后复用为下一轮笑声门禁。
 13. 工具轮不写成普通assistant文本历史；真实tool/tool-result结构尚未进入`ChatMessage`前，宁可不保留该轮，也不能用“已执行”文本污染下一轮工具选择。
 
-当前暂停点（2026-09-19）：EVA1已运行固件2.0.11。除既有“笑声→ASR→DeepSeek/TTS→再次笑声→下一轮监听”、按钮退出/重入和8秒静默退出外，真实DeepSeek还完成`self_otto_laugh`以及连续“大笑→后退两步”的工具调用，均由Dispatcher等待`completed`，最终只读验证为idle。工具文本历史缺陷在实测中暴露并修复；两次已完成的前进一步随后用后退两步补偿。最终本地`144 passed`、Ruff和mypy通过；EVA2、完整按键语音工具回合、WebSocket真机Profile、正式CI及实体Windows仍未验收。详细记录见`docs/sessions/20260919-llm-tools-test0.9.md`。
+`test0.9`完成点（2026-09-19）：EVA1运行固件2.0.11。除既有“笑声→ASR→DeepSeek/TTS→再次笑声→下一轮监听”、按钮退出/重入和8秒静默退出外，真实DeepSeek还完成`self_otto_laugh`以及连续“大笑→后退两步”的工具调用，均由Dispatcher等待`completed`，最终只读验证为idle。工具文本历史缺陷在实测中暴露并修复；两次已完成的前进一步随后用后退两步补偿。最终本地`144 passed`、Ruff和mypy通过；详细记录见`docs/sessions/20260919-llm-tools-test0.9.md`。
+
+### `test1.0` 多设备控制台与真机体验加固
+
+1. 火山TTS的24 kHz S16LE PCM在Opus编码前应用`audio.tts_pcm_gain`，范围`0.25..4.0`，生产配置为2.0；逐样本饱和钳位并正确处理Provider块之间拆开的半个采样。
+2. DeepSeek在工具前尚未成句的短前缀可丢弃；若完整句子已经进入TTS，则必须完成播放并发送stop后再串行执行唯一工具。工具后文字和多工具仍失败关闭，工具轮不写普通文本历史。
+3. 笑声门禁的单次状态查询超时在总笑声时限内重试；开场动作因设备状态不安全被拒绝时，持续查询到`action_state=idle`且`sound_busy!=true`才重试提交。始终未观测完整`sound.busy true→false`仍失败关闭。
+4. WebUI按稳定device_id多选1至16台设备，使用动作目录交集，显式确认后并发提交批量动作或stop；每台设备独立结果，同一设备仍由Dispatcher串行。
+5. Server维护每设备有界对话投影，WebUI显示状态、用户转写、助手句子、工具/动作和错误；旧session、敏感字段和音频字段不能污染快照。
+6. WebUI提供前进、后退、左右转、跳跃、左右摇摆、太空步、抖动、弯腰、大笑、复位和stop快捷按钮；目标仍来自显式勾选，目录缺失时先做只读verify。控制令牌只保存在浏览器会话；本机开发启动可通过仅限loopback、不会进入HTTP请求的URL fragment一次性注入并立即从地址栏移除。未授权或401时锁定所有mutation控件并常驻说明“未进入服务端”；正式8081控制面不再与旧8080诊断进程并存。
+7. ASR在云partial稳定端点之外增加“已观测说话后VAD连续静音1.2秒”兜底；空final只触发一次本地大笑并重开监听，不调用LLM或卡在recognizing。Dispatcher等待舵机idle和本地sound非busy后才完成动作。
+8. EVA固件2.0.15用21个看山对话表情和22个动作贴图替换中央旧大眼区域，保留顶部状态栏和底部聊天文字；动作结束/stop恢复最近基础表情。设备音量一次性迁移到100，动作任务优先级低于音频任务；正式对话控制先返回关联ACK，再异步切换音频通道。
+9. 真机默认三步`swing`可略超15秒；生产动作完成时限提高到30秒，仍保留超时自动stop。ACK时限不变，避免用放宽设备接收门限掩盖断线。
+
+当前状态（2026-09-19）：本地锁文件、Ruff、mypy strict、176项pytest、Node语法和差异检查通过；2.0.15镜像完整构建并OTA到EVA1，hello/心跳确认版本2.0.15与音量100，Server确认TTS增益2.0。正式对话start/stop关联ACK、VAD兜底收句、WebUI真实前进/转向/太空步和动作音效排空均取得真机证据；空final恢复分支已自动验证，需下一次真机语音回合复验。EVA2保持关机，真实双机语音不冒充通过。详细记录见`docs/sessions/20260919-multidevice-webui-test1.0.md`。
 
 纵向 MVP 的硬门禁是“大笑真实结束后才能开始听”。若没有完整的 `sound.busy true→false` 证据，本轮必须失败关闭，ASR 与 LLM 调用数必须为零。
 
@@ -366,4 +380,4 @@ Provider和协议已经通过独立烟测冻结；`test0.9`又完成EVA1的MQTT+
 11. 重启MQTT Broker后两台设备恢复连接和状态查询
 ```
 
-Phase 4真机步骤、Topic和JSON以 `docs/MQTT_CONTROL_CONTRACT.md` 为准。固件`2.0.5`的TCP测试只保留为历史行为基线；MQTT控制已在两台`2.0.6`真机通过，EVA1随后升级到`2.0.11`并完成语音/工具纵向链，EVA2当前为`2.0.9`且关机。历史结果不能替代下一轮双机并发验收。
+Phase 4真机步骤、Topic和JSON以 `docs/MQTT_CONTROL_CONTRACT.md` 为准。固件`2.0.5`的TCP测试只保留为历史行为基线；MQTT控制已在两台`2.0.6`真机通过，EVA1随后完成2.0.11语音/工具纵向链并升级到2.0.15看山/音量/正式对话控制版本，EVA2当前为`2.0.9`且关机。历史结果不能替代下一轮双机并发验收。

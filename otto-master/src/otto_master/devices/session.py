@@ -34,6 +34,9 @@ class DeviceSession:
     current_action: str | None = None
     sound_busy: bool | None = None
     sound_name: str | None = None
+    display_action_image_active: bool | None = None
+    display_image_alias: str | None = None
+    output_volume: int | None = None
     actions: tuple[dict[str, JsonValue], ...] = ()
     actions_updated_at: datetime | None = None
     enabled: bool = True
@@ -133,16 +136,38 @@ class DeviceSession:
         sound_name = (
             raw_sound_name if isinstance(raw_sound_name, str) else self.sound_name
         )
+        raw_display_active = payload.get("display_action_image_active")
+        display_active = (
+            raw_display_active
+            if isinstance(raw_display_active, bool)
+            else self.display_action_image_active
+        )
+        raw_display_alias = payload.get("display_image_alias")
+        display_alias = (
+            raw_display_alias if isinstance(raw_display_alias, str) else self.display_image_alias
+        )
+        raw_output_volume = payload.get("output_volume")
+        output_volume = (
+            raw_output_volume
+            if isinstance(raw_output_volume, int) and not isinstance(raw_output_volume, bool)
+            else self.output_volume
+        )
         changed = (
             action_state is not self.action_state
             or normalized_action != self.current_action
             or sound_busy is not self.sound_busy
             or sound_name != self.sound_name
+            or display_active is not self.display_action_image_active
+            or display_alias != self.display_image_alias
+            or output_volume != self.output_volume
         )
         self.action_state = action_state
         self.current_action = normalized_action
         self.sound_busy = sound_busy
         self.sound_name = sound_name
+        self.display_action_image_active = display_active
+        self.display_image_alias = display_alias
+        self.output_volume = output_volume
         return changed
 
     def apply_actions(
@@ -234,6 +259,9 @@ class DeviceSession:
         self.current_action = None
         self.sound_busy = None
         self.sound_name = None
+        self.display_action_image_active = None
+        self.display_image_alias = None
+        self.output_volume = None
         self.actions = ()
         self.actions_updated_at = None
 
@@ -257,6 +285,9 @@ class DeviceSession:
             "current_action": self.current_action,
             "sound_busy": self.sound_busy,
             "sound_name": self.sound_name,
+            "display_action_image_active": self.display_action_image_active,
+            "display_image_alias": self.display_image_alias,
+            "output_volume": self.output_volume,
             "actions_count": len(self.actions),
             "actions_updated_at": isoformat(self.actions_updated_at),
             "enabled": self.enabled,

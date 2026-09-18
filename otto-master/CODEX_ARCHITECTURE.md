@@ -123,7 +123,7 @@ Gateway or Storage consumes output
 - 将Dispatcher的单设备命令编码后发布到精确down Topic。
 - 维护MQTT连接重试、命令超时和协议级指标。
 
-当前实现边界：Phase 4A-4C已实现安全上行、白名单查询、动作/stop、精确down发布和ACK/状态映射；Phase 4E已在EVA1/EVA2固件2.0.6上完成真实MQTT控制门禁。`test0.9`进一步让语音JSON经MQTT、连续Opus经AES-128-CTR UDP传输，并在EVA1固件2.0.11上完成单机流式问答、循环门禁和8秒静默退出验收。
+当前实现边界：Phase 4A-4C已实现安全上行、白名单查询、动作/stop、精确down发布和ACK/状态映射；Phase 4E已在EVA1/EVA2固件2.0.6上完成真实MQTT控制门禁。`test0.9`进一步让语音JSON经MQTT、连续Opus经AES-128-CTR UDP传输，并在EVA1上完成单机流式问答、循环门禁和8秒静默退出验收；`test1.0`的EVA1固件为2.0.15，正式对话控制在执行可能阻塞的音频切换前先返回关联ACK。
 
 规则：
 
@@ -157,6 +157,10 @@ TCP不是第二套业务模型。Phase 4D已用真实loopback Socket验证查询
 - 校验输入并发布内部命令。
 - 将查询结果转换为HTTP响应。
 - 用有界事件历史、服务端stream ID和cursor支持浏览器断线恢复。
+- 维护按device_id/session隔离的脱敏对话投影，供刷新和事件重连恢复用户文字、助手句子、工具结果与状态；该快照与事件流一样要求控制台授权，不能把家庭语音文字作为公开只读状态。
+- 将显式的1至16个设备目标并发拆成独立动作或stop提交，逐设备返回结果；不提供通配或隐式全体动作入口。
+- 将显式设备选择转换为动作目录交集、快捷动作按钮和正式对话start/stop；每个目标仍经Message Bus、能力门禁和关联ACK，不允许浏览器直发设备协议。
+- 控制面把“只读状态可见”和“当前标签页可下发命令”分开显示；无令牌或401时锁定动作/对话控件并常驻显示失败原因。正式Runtime固定使用HTTP 8081，旧8080诊断进程不得与其并存造成入口歧义。
 - 设备发放接口与Browser API分离；只有受保护的发放响应可以返回该设备自己的MQTT、TCP和WebSocket凭据。
 
 WebUI不能直接获得或持有设备Socket或MQTT设备凭据，也不能指定任意MQTT Topic。
@@ -203,7 +207,7 @@ Session职责：
 - 保存单台设备按transport隔离的在线/心跳/Profile，以及当前首选传输的协议能力和状态机。
 - 串行命令队列由Dispatcher按device_id持有；WebSocket与MQTT UDP Gateway分别有界保存短期Opus，`DeviceAudioRouter`按`frame_ref`前缀路由读取与TTS播放，不把音频字节放进Session或Message Bus。
 - 与Dispatcher配合，确保同一机器人动作不发生无序并发。
-- 区分 `accepted`、`moving` 和 `completed`，不能把MQTT立即ACK当作动作完成。
+- 区分 `accepted`、`moving` 和 `completed`，不能把MQTT立即ACK当作动作完成；有本地音效的动作只有同时满足`action_state=idle`和`sound_busy!=true`才能完成。
 
 当前实现边界：Phase 4A的Session保存身份、连接状态、固件、动态IP、能力、动作状态和动作目录；Phase 4C的Dispatcher按device_id提供串行动作队列并关联completed；Phase 4D新增`available_transports`、固定优先级、非首选快照隔离和逐transport降级。原始Socket仍由对应Gateway持有，不进入Session或SQLite。
 
@@ -227,13 +231,13 @@ offline → sleeping → wake_check → ack_playing
 
 ### ASR
 
-输入按设备隔离的音频描述或短期 `frame_ref`，管理一个utterance的开始、partial、final、失败和取消，输出规范化转写结果。当前以3个60 ms帧聚合成180 ms PCM块发送火山；设备auto模式缺少listen/stop时，以非空partial稳定1.2秒作为服务端端点，并先排空已接收队列。不得判断唤醒词或机器人动作，也不得持久化原始音频。
+输入按设备隔离的音频描述或短期 `frame_ref`，管理一个utterance的开始、partial、final、失败和取消，输出规范化转写结果。当前以3个60 ms帧聚合成180 ms PCM块发送火山；设备auto模式缺少listen/stop时采用双端点：优先使用非空partial稳定1.2秒，同时在已经观测到本轮`VAD speaking=true`后，以连续1.2秒`false`兜底。两种路径都先锁住新帧、排空已接收队列，再发送云端结束包；开始说话前的`false`不能误收句。不得判断唤醒词或机器人动作，也不得持久化原始音频。
 
 ### LLM
 
-输入规范化对话请求，输出文本回复或至多一个结构化工具调用。`test0.9`使用DeepSeek流式SSE、每设备短文本历史、512字符输入上限、96字符输出上限和4项有界队列；增量文本按句送给TTS，流式`tool_calls`按index组装并严格拒绝混合文本、多个调用、变化的call ID、未注册工具、重复JSON键、非有限数值、4 KiB以上参数和过深结构。
+输入规范化对话请求，输出文本回复或至多一个结构化工具调用。当前使用DeepSeek流式SSE、每设备短文本历史、512字符输入上限、96字符输出上限和4项有界队列；增量文本按句送给TTS，流式`tool_calls`按index组装。工具前尚未形成完整句子的文本前缀可丢弃；已经提交的完整句子必须先完成TTS再执行唯一工具。工具后的文字、多个调用、变化的call ID、未注册工具、重复JSON键、非有限数值、4 KiB以上参数和过深结构仍严格拒绝。
 
-工具定义只从当前设备在线快照、能力和动作目录生成。DeepSeek兼容名使用`self_otto_*`，在Server内映射到固件动作；目标`device_id`固定取当前语音session，模型没有目标设备参数。成功工具轮不追加TTS，也不伪装成普通assistant文本写入短历史；真实结果由Message Bus事件和Command Repository记录。
+工具定义只从当前设备在线快照、能力和动作目录生成。DeepSeek兼容名使用`self_otto_*`，在Server内映射到固件动作；目标`device_id`固定取当前语音session，模型没有目标设备参数。成功工具轮不朗读动作结果，也不伪装成普通assistant文本写入短历史；若已有完整前置句，则只允许按“TTS stop后执行工具”的顺序播放该句。真实结果由Message Bus事件和Command Repository记录。
 
 ### Robot Tool Bridge
 
@@ -241,14 +245,15 @@ offline → sleeping → wake_check → ack_playing
 
 ### TTS
 
-输入文本、目标设备和音色配置，通过句子、PCM、Opus三个有界生产阶段向播放消费者输出有序60 ms帧。当前使用火山资源`volc.service_type.10029`与湾区大叔音`zh_female_wanqudashu_moon_bigtts`。不得改变唤醒状态，也不得把“合成完成”误当作扬声器物理播放完成；当前`tts.playback.finished`仅表示服务端按节奏发完帧并成功发送`stop`。
+输入文本、目标设备和音色配置，通过句子、PCM、Opus三个有界生产阶段向播放消费者输出有序60 ms帧。当前使用火山资源`volc.service_type.10029`与湾区大叔音`zh_female_wanqudashu_moon_bigtts`。Provider的S16LE PCM在Opus编码前应用配置增益；生产值为2.0，采用饱和钳位且能跨任意Provider块保留半个采样。不得改变唤醒状态，也不得把“合成完成”误当作扬声器物理播放完成；当前`tts.playback.finished`仅表示服务端按节奏发完帧并成功发送`stop`。
 
 ### WakeGate
 
 - 管理每台设备隔离的`waiting → laughing → listening → recognizing → answering`状态和超时。
-- 每轮先触发本地约2秒`laugh`，必须观测`sound.busy=true → false`后才准入下一条utterance；笑声和回答阶段的输入失败关闭。
+- 每轮先触发本地约2秒`laugh`，必须观测`sound.busy=true → false`后才准入下一条utterance；单次状态查询超时在总笑声门限内重试，始终未观测完整边沿才失败关闭。笑声和回答阶段的输入失败关闭。
 - ASR final驱动DeepSeek与TTS；回答播放完成后在同一设备session重新进入`laughing`，完成下一次笑声门禁后才开放下一条utterance。
-- ASR final也可驱动一个受限工具调用；成功动作等待Dispatcher真实`completed`后直接进入下一轮笑声门禁，不朗读“已完成”。失败只播放固定失败提示。显式`laugh`工具本身完成后复用为下一轮门禁，禁止连续再笑一次。
+- ASR final为空白时不进入LLM，也不留在`recognizing`；WakeGate按“听不懂”语义只执行一次本地大笑，然后重新开放一个新utterance。重复/过期空final不能重复触发动作。
+- ASR final也可驱动一个受限工具调用；若模型先提交完整前置句，WakeGate等待TTS完成并stop后才调用工具，禁止语音和舵机重叠。成功动作等待Dispatcher真实`completed`后直接进入下一轮笑声门禁，不朗读“已完成”。失败只播放固定失败提示。显式`laugh`工具本身完成后复用为下一轮门禁，禁止连续再笑一次。
 - 每次开放监听时启动8秒无讲话计时；精确匹配当前`device_id + session_id + utterance_id`的VAD `speaking=true`或ASR partial会取消计时，纯静默则由Server发送`goodbye`并回到`waiting`。
 - Otto按钮在idle时进入循环对话，在connecting/listening/speaking时发送设备`goodbye`退出；设备与Server双方的关闭原因都转换为`voice.session.closed`，不能靠Socket断开猜测用户意图。
 - 任意失败关闭ASR/TTS、尝试安全stop，并发布稳定失败状态；新的不同session允许从`failed`自恢复，不能要求重启Runtime。
@@ -277,7 +282,7 @@ offline → sleeping → wake_check → ack_playing
 - 绕过Device Manager直接访问Socket。
 - 将空目标解释成全体机器人。
 
-当前实现边界：Phase 4C已实现动作目录/参数/能力/在线预检、每设备有界串行worker、跨设备并行、stop抢占、重复command ID幂等、超时安全stop和集群stop拆分。`CommandRepository`持久化命令及每次转移；重启将未完成命令失败关闭，不重放动作。Phase 4D在接受命令时锁定当前transport；只有对应Gateway发送，错误transport事实被拒绝，传输切换使在途命令失败关闭。`test0.9`的Robot Tool Bridge只能把当前语音设备的单个白名单工具送入这条既有链，不能直接访问MQTT或Socket。分组和普通动作广播仍未实现。
+当前实现边界：Phase 4C已实现动作目录/参数/能力/在线预检、每设备有界串行worker、跨设备并行、stop抢占、重复command ID幂等、超时安全stop和集群stop拆分。`CommandRepository`持久化命令及每次转移；重启将未完成命令失败关闭，不重放动作。Phase 4D在接受命令时锁定当前transport；只有对应Gateway发送，错误transport事实被拒绝，传输切换使在途命令失败关闭。`test1.0`进一步把`Session.sound_busy=true`纳入动作准入和完成判据：舵机先回idle但本地OGG尚未排空时命令保持moving，后续动作不能抢占共享解码器。Robot Tool Bridge只能把当前语音设备的单个白名单工具送入这条既有链，不能直接访问MQTT或Socket。持久设备组和普通动作广播仍未实现。
 
 ## 9. Audio / Opus
 
@@ -292,7 +297,7 @@ offline → sleeping → wake_check → ack_playing
 
 阻塞或CPU较重的转换通过Runtime提供的Worker Pool执行。
 
-Phase 5音频参数：设备上行以16 kHz、单声道、60 ms Opus为基线；火山TTS直接返回24 kHz、单声道、S16LE PCM，编码为60 ms Opus后下发。24 kHz下一帧为1440个采样点、2880字节PCM。采样率由设备hello与服务端hello协商，Gateway不得只凭默认值猜测。
+Phase 5音频参数：设备上行以16 kHz、单声道、60 ms Opus为基线；火山TTS直接返回24 kHz、单声道、S16LE PCM，经可配置饱和增益后编码为60 ms Opus下发。24 kHz下一帧为1440个采样点、2880字节PCM。采样率由设备hello与服务端hello协商，Gateway不得只凭默认值猜测。
 
 连续音频字节属于数据面，按 `device_id + utterance_id` 存放于对应Device Gateway的有界短期内存；`DeviceAudioRouter`提供传输无关访问，Message Bus只传帧序号、格式和 `frame_ref`。跨设备引用、过期引用、序号缺失/重复/倒序都失败关闭。详细合同见 `docs/VOLCENGINE_SPEECH_INTEGRATION.md`。
 
@@ -347,7 +352,7 @@ SQLite建议实体：
 
 ## 14. 设备传输策略
 
-固件2.0.11的主语音协议由认证、可逆的Profile配置二选一：
+当前固件2.0.15的主语音协议由认证、可逆的Profile配置二选一：
 
 ```text
 MQTT profile: MQTT JSON控制与语音信令 + 加密UDP Opus

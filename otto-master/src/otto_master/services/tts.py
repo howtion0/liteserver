@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import math
+import struct
 from collections.abc import AsyncIterable, AsyncIterator
 from dataclasses import dataclass
 from typing import Any, Protocol
@@ -98,6 +100,45 @@ class _EncodedDone:
 _PIPELINE_DONE = _PipelineDone()
 
 
+def apply_pcm_gain(pcm: bytes, gain: float) -> bytes:
+    """Scale little-endian signed 16-bit PCM with saturating arithmetic."""
+
+    if not isinstance(pcm, bytes):
+        raise TypeError("PCM payload must be bytes")
+    if len(pcm) % 2:
+        raise ValueError("PCM payload must contain complete S16LE samples")
+    if not math.isfinite(gain) or not 0.25 <= gain <= 4.0:
+        raise ValueError("PCM gain must be finite and between 0.25 and 4.0")
+    if gain == 1.0 or not pcm:
+        return pcm
+    output = bytearray(len(pcm))
+    for index, (sample,) in enumerate(struct.iter_unpack("<h", pcm)):
+        scaled = sample * gain
+        rounded = int(scaled + 0.5) if scaled >= 0 else int(scaled - 0.5)
+        clamped = min(32_767, max(-32_768, rounded))
+        struct.pack_into("<h", output, index * 2, clamped)
+    return bytes(output)
+
+
+class _StreamingPcmGain:
+    """Preserve a split S16LE sample across arbitrary provider chunks."""
+
+    def __init__(self, gain: float) -> None:
+        apply_pcm_gain(b"", gain)
+        self.gain = gain
+        self._carry = b""
+
+    def feed(self, chunk: bytes) -> bytes:
+        combined = self._carry + chunk
+        complete_bytes = len(combined) - (len(combined) % 2)
+        self._carry = combined[complete_bytes:]
+        return apply_pcm_gain(combined[:complete_bytes], self.gain)
+
+    def finish(self) -> None:
+        if self._carry:
+            raise ValueError("TTS provider ended with an incomplete S16LE sample")
+
+
 class _FramePacer:
     def __init__(self, frame_duration_ms: int, *, enabled: bool) -> None:
         self._interval = frame_duration_ms / 1_000
@@ -129,6 +170,7 @@ class TtsService:
         sample_rate: int = 24_000,
         channels: int = 1,
         frame_duration_ms: int = 60,
+        pcm_gain: float = 1.0,
         pace_audio: bool = True,
         sentence_queue_size: int = 4,
         pcm_queue_size: int = 16,
@@ -144,6 +186,8 @@ class TtsService:
             channels=channels,
             frame_duration_ms=frame_duration_ms,
         )
+        apply_pcm_gain(b"", pcm_gain)
+        self.pcm_gain = pcm_gain
         self.pace_audio = pace_audio
         self.sentence_queue_size = sentence_queue_size
         self.pcm_queue_size = pcm_queue_size
@@ -161,6 +205,7 @@ class TtsService:
             "active_playbacks": len(self._active),
             "completed": self._completed,
             "failed": self._failed,
+            "pcm_gain": self.pcm_gain,
             "pipeline": {
                 "sentence_queue_size": self.sentence_queue_size,
                 "pcm_queue_size": self.pcm_queue_size,
@@ -350,6 +395,7 @@ class TtsService:
                     raise item.error
                 await output.put(_SentenceStart(index, item))
                 pcm_bytes = 0
+                pcm_gain = _StreamingPcmGain(self.pcm_gain)
                 async for pcm in self.provider.synthesize(
                     item,
                     sample_rate=self.parameters.sample_rate,
@@ -359,7 +405,10 @@ class TtsService:
                     if not pcm or len(pcm) > 1024 * 1024:
                         raise ValueError("TTS provider yielded an invalid PCM chunk")
                     pcm_bytes += len(pcm)
-                    await output.put(_PcmChunk(index, pcm))
+                    amplified = pcm_gain.feed(pcm)
+                    if amplified:
+                        await output.put(_PcmChunk(index, amplified))
+                pcm_gain.finish()
                 await output.put(_SentenceEnd(index, pcm_bytes))
                 index += 1
         except asyncio.CancelledError:

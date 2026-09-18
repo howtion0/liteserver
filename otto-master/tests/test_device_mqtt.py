@@ -46,7 +46,12 @@ def test_translates_read_only_device_protocol_messages() -> None:
             "runtime": {
                 "otto": {
                     "action": {"state": "moving", "name": "swing"},
-                    "sound": {"busy": True, "name": "laugh.wav"},
+                    "sound": {"busy": True, "action_sound": "laugh"},
+                    "display": {
+                        "action_image_active": True,
+                        "image_alias": "action_swing",
+                    },
+                    "audio": {"output_volume": 100},
                 }
             },
         }
@@ -55,7 +60,10 @@ def test_translates_read_only_device_protocol_messages() -> None:
     assert state.payload["action_state"] == "moving"
     assert state.payload["current_action"] == "swing"
     assert state.payload["sound_busy"] is True
-    assert state.payload["sound_name"] == "laugh.wav"
+    assert state.payload["sound_name"] == "laugh"
+    assert state.payload["display_action_image_active"] is True
+    assert state.payload["display_image_alias"] == "action_swing"
+    assert state.payload["output_volume"] == 100
 
     actions = _translate(
         {
@@ -120,6 +128,46 @@ def test_ack_runtime_state_is_a_separate_correlated_state_fact() -> None:
                 "runtime": {
                     "otto": {"action": {"state": "teleporting", "name": "swing"}}
                 },
+            }
+        )
+
+
+@pytest.mark.parametrize(
+    ("command", "ok", "expected_topic"),
+    [
+        ("start", True, "device.conversation.control.accepted"),
+        ("stop", False, "device.conversation.control.failed"),
+    ],
+)
+def test_translates_correlated_conversation_control_ack(
+    command: str,
+    ok: bool,
+    expected_topic: str,
+) -> None:
+    message = _translate(
+        {
+            "type": "otto_conversation_ack",
+            "id": "voice-command-1",
+            "command": command,
+            "ok": ok,
+            "error": "busy" if not ok else None,
+        }
+    )[0]
+
+    assert message.topic == expected_topic
+    assert message.correlation_id == "voice-command-1"
+    assert message.payload["command"] == command
+    assert message.payload["accepted"] is ok
+
+
+def test_rejects_invalid_conversation_control_ack() -> None:
+    with pytest.raises(DeviceMessageError, match="start or stop"):
+        _translate(
+            {
+                "type": "otto_conversation_ack",
+                "id": "voice-command-1",
+                "command": "toggle",
+                "ok": True,
             }
         )
 
@@ -242,6 +290,33 @@ def test_encodes_dispatcher_action_and_stop_with_command_id() -> None:
         "speed": 1000,
     }
     assert json.loads(encoded_stop.payload) == {"type": "stop", "id": "stop-1"}
+
+
+@pytest.mark.parametrize("command", ["start", "stop"])
+def test_encodes_conversation_control_to_exact_device_topic(command: str) -> None:
+    command_id = f"conversation-{command}"
+    message = Message.create(
+        topic=f"device.conversation.{command}.requested",
+        kind=MessageKind.COMMAND,
+        source="conversation_control",
+        target="device:aabbccddeeff",
+        correlation_id=command_id,
+        payload={
+            "device_id": "aabbccddeeff",
+            "transport": "mqtt",
+            "command_id": command_id,
+            "command": command,
+        },
+    )
+
+    encoded = encode_device_command(message)
+
+    assert encoded.topic == "otto/v1/devices/aabbccddeeff/down"
+    assert json.loads(encoded.payload) == {
+        "type": "otto_conversation",
+        "id": command_id,
+        "command": command,
+    }
 
 
 def test_action_encoder_rejects_reserved_or_normalized_duplicate_parameters() -> None:

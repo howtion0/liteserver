@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import socket
 from dataclasses import replace
@@ -16,6 +17,7 @@ from otto_master.gateways.mqtt_broker import EmbeddedMqttBroker
 from otto_master.gateways.web import EventHub, WebContext, create_app
 from otto_master.message_bus import MessageBus
 from otto_master.messages import Message, MessageKind
+from otto_master.services.conversation_control import ConversationControlError
 from otto_master.storage.database import Database
 
 
@@ -67,11 +69,19 @@ class FakeCommandDispatcher:
     def __init__(self) -> None:
         self.commands: dict[str, dict[str, Any]] = {}
         self.counter = 0
+        self.active_actions = 0
+        self.max_active_actions = 0
 
     async def submit_action(self, **values: Any) -> dict[str, Any]:
-        if values["device_id"] == "aabbccddee99":
-            raise DispatchRequestError("device_not_online", "device is not online")
-        return self._create("action", values)
+        self.active_actions += 1
+        self.max_active_actions = max(self.max_active_actions, self.active_actions)
+        try:
+            await asyncio.sleep(0)
+            if values["device_id"] == "aabbccddee99":
+                raise DispatchRequestError("device_not_online", "device is not online")
+            return self._create("action", values)
+        finally:
+            self.active_actions -= 1
 
     async def submit_stop(self, **values: Any) -> dict[str, Any]:
         return self._create("stop", values)
@@ -98,6 +108,31 @@ class FakeCommandDispatcher:
         }
         self.commands[command_id] = command
         return command
+
+
+class FakeConversationControl:
+    def __init__(self) -> None:
+        self.active = 0
+        self.max_active = 0
+        self.calls: list[dict[str, Any]] = []
+
+    async def control(self, **values: Any) -> dict[str, Any]:
+        self.active += 1
+        self.max_active = max(self.max_active, self.active)
+        self.calls.append(values)
+        try:
+            await asyncio.sleep(0)
+            if values["device_id"] == "aabbccddee99":
+                raise ConversationControlError("device_not_online", "device is not online")
+            return {
+                "device_id": values["device_id"],
+                "command": values["command"],
+                "command_id": f"conversation-{len(self.calls)}",
+                "status": "accepted",
+                "transport": "mqtt",
+            }
+        finally:
+            self.active -= 1
 
 
 def _free_port() -> int:
@@ -203,6 +238,18 @@ async def test_control_plane_static_health_ota_and_errors(tmp_path: Path) -> Non
             root = await client.get("/")
             assert root.status_code == 200
             assert "Otto Master" in root.text
+            assert 'id="quick-action-grid"' in root.text
+            assert 'id="control-auth-badge"' in root.text
+            assert 'id="control-status"' in root.text
+            assert 'id="cluster-stop" class="danger" type="button" disabled' in root.text
+            assert 'data-quick-action="walk"' in root.text
+            app_js = await client.get("/assets/app.js")
+            assert app_js.status_code == 200
+            assert 'bootstrapLoopbackToken' in app_js.text
+            assert 'fragment.get("console_token")' in app_js.text
+            assert 'hasControlAuthorization' in app_js.text
+            assert '控制命令未发送' in app_js.text
+            assert "前进" in root.text and "后退" in root.text
             assert "frame-ancestors 'none'" in root.headers["content-security-policy"]
 
             health = await client.get("/api/v1/health", headers={"X-Correlation-ID": "test-cid"})
@@ -253,6 +300,10 @@ async def test_mutations_require_auth_and_reject_arbitrary_fields(tmp_path: Path
             )
             assert unauthenticated.status_code == 401
             assert unauthenticated.json()["error"]["code"] == "authentication_required"
+
+            private_conversations = await client.get("/api/v1/conversations")
+            assert private_conversations.status_code == 401
+            assert private_conversations.json()["error"]["code"] == "authentication_required"
 
             denied_origin = await client.put(
                 "/api/v1/settings",
@@ -397,6 +448,324 @@ async def test_command_apis_delegate_to_dispatcher_and_return_persistent_state(
         assert cluster.json()["accepted"] == 2
         assert unavailable.status_code == 409
         assert unavailable.json()["error"]["code"] == "device_not_online"
+    finally:
+        await _close_context(context)
+
+
+async def test_batch_command_apis_use_explicit_unique_targets_and_isolate_results(
+    tmp_path: Path,
+) -> None:
+    context = await _context(_config(tmp_path))
+    dispatcher = FakeCommandDispatcher()
+    context.dispatcher = dispatcher
+    app = create_app(context)
+    transport = httpx.ASGITransport(app=app)
+    try:
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            action = await client.post(
+                "/api/v1/commands/actions/batch",
+                json={
+                    "device_ids": ["aabbccddee01", "aabbccddee99"],
+                    "action": "swing",
+                    "parameters": {"steps": 2},
+                    "confirmation": True,
+                },
+            )
+            duplicate = await client.post(
+                "/api/v1/commands/actions/batch",
+                json={
+                    "device_ids": ["aabbccddee01", "aabbccddee01"],
+                    "action": "swing",
+                    "confirmation": True,
+                },
+            )
+            wildcard = await client.post(
+                "/api/v1/commands/actions/batch",
+                json={
+                    "device_ids": ["*"],
+                    "action": "swing",
+                    "confirmation": True,
+                },
+            )
+            unconfirmed = await client.post(
+                "/api/v1/commands/actions/batch",
+                json={
+                    "device_ids": ["aabbccddee01"],
+                    "action": "swing",
+                    "confirmation": False,
+                },
+            )
+            stopped = await client.post(
+                "/api/v1/commands/stops/batch",
+                json={
+                    "device_ids": ["aabbccddee01", "aabbccddee02"],
+                    "confirmation": True,
+                },
+            )
+
+        assert action.status_code == 202
+        assert action.json()["requested"] == 2
+        assert action.json()["accepted"] == 1
+        assert action.json()["failed"] == 1
+        assert action.json()["items"][0]["device_id"] == "aabbccddee01"
+        assert action.json()["items"][0]["accepted"] is True
+        assert action.json()["items"][1]["error"]["code"] == "device_not_online"
+        assert dispatcher.max_active_actions == 2
+        assert duplicate.status_code == 422
+        assert duplicate.json()["error"]["code"] == "duplicate_device_ids"
+        assert wildcard.status_code == 422
+        assert wildcard.json()["error"]["code"] == "invalid_device_ids"
+        assert unconfirmed.status_code == 422
+        assert unconfirmed.json()["error"]["code"] == "confirmation_required"
+        assert stopped.status_code == 202
+        assert stopped.json()["accepted"] == 2
+        assert [item["device_id"] for item in stopped.json()["items"]] == [
+            "aabbccddee01",
+            "aabbccddee02",
+        ]
+    finally:
+        await _close_context(context)
+
+
+async def test_batch_conversation_api_uses_explicit_targets_ack_and_result_isolation(
+    tmp_path: Path,
+) -> None:
+    context = await _context(_config(tmp_path))
+    controller = FakeConversationControl()
+    context.conversation_control = controller
+    app = create_app(context)
+    transport = httpx.ASGITransport(app=app)
+    try:
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            started = await client.post(
+                "/api/v1/commands/conversations/batch",
+                json={
+                    "device_ids": ["aabbccddee01", "aabbccddee99"],
+                    "command": "start",
+                    "confirmation": True,
+                },
+                headers={"X-Correlation-ID": "batch-conversation-1"},
+            )
+            duplicate = await client.post(
+                "/api/v1/commands/conversations/batch",
+                json={
+                    "device_ids": ["aabbccddee01", "aabbccddee01"],
+                    "command": "stop",
+                    "confirmation": True,
+                },
+            )
+            wildcard = await client.post(
+                "/api/v1/commands/conversations/batch",
+                json={
+                    "device_ids": ["*"],
+                    "command": "start",
+                    "confirmation": True,
+                },
+            )
+            unconfirmed = await client.post(
+                "/api/v1/commands/conversations/batch",
+                json={
+                    "device_ids": ["aabbccddee01"],
+                    "command": "start",
+                    "confirmation": False,
+                },
+            )
+            invalid_command = await client.post(
+                "/api/v1/commands/conversations/batch",
+                json={
+                    "device_ids": ["aabbccddee01"],
+                    "command": "toggle",
+                    "confirmation": True,
+                },
+            )
+            stopped = await client.post(
+                "/api/v1/commands/conversations/batch",
+                json={
+                    "device_ids": ["aabbccddee01", "aabbccddee02"],
+                    "command": "stop",
+                    "confirmation": True,
+                },
+            )
+
+        assert started.status_code == 202
+        assert started.json()["command"] == "start"
+        assert started.json()["requested"] == 2
+        assert started.json()["accepted"] == 1
+        assert started.json()["failed"] == 1
+        assert started.json()["items"][0]["status"] == "accepted"
+        assert started.json()["items"][1]["error"]["code"] == "device_not_online"
+        assert controller.max_active == 2
+        assert {call["correlation_id"] for call in controller.calls[:2]} == {
+            "batch-conversation-1"
+        }
+        assert duplicate.status_code == 422
+        assert duplicate.json()["error"]["code"] == "duplicate_device_ids"
+        assert wildcard.status_code == 422
+        assert wildcard.json()["error"]["code"] == "invalid_device_ids"
+        assert unconfirmed.status_code == 422
+        assert unconfirmed.json()["error"]["code"] == "confirmation_required"
+        assert invalid_command.status_code == 422
+        assert invalid_command.json()["error"]["code"] == "validation_error"
+        assert stopped.status_code == 202
+        assert stopped.json()["accepted"] == 2
+        assert [item["device_id"] for item in stopped.json()["items"]] == [
+            "aabbccddee01",
+            "aabbccddee02",
+        ]
+    finally:
+        await _close_context(context)
+
+
+async def test_conversation_snapshot_is_per_device_redacted_and_rejects_stale_session(
+    tmp_path: Path,
+) -> None:
+    context = await _context(_config(tmp_path))
+    context.devices = FakeDeviceReader()
+    messages = [
+        Message.create(
+            topic="audio.input.started",
+            kind=MessageKind.EVENT,
+            source="device:e1",
+            target="service:asr",
+            payload={
+                "device_id": "aabbccddee01",
+                "session_id": "session-eva1",
+                "utterance_id": "utterance-eva1",
+            },
+        ),
+        Message.create(
+            topic="voice.session.state.changed",
+            kind=MessageKind.STATE,
+            source="service:wake_gate",
+            target="device:aabbccddee01",
+            payload={"device_id": "aabbccddee01", "state": "answering"},
+        ),
+        Message.create(
+            topic="voice.transcription.displayed",
+            kind=MessageKind.RESULT,
+            source="service:wake_gate",
+            target="device:aabbccddee01",
+            payload={
+                "device_id": "aabbccddee01",
+                "session_id": "session-eva1",
+                "utterance_id": "utterance-eva1",
+                "text": "请前进",
+                "token": "must-not-leak",
+            },
+        ),
+        Message.create(
+            topic="tts.synthesis.started",
+            kind=MessageKind.EVENT,
+            source="service:tts",
+            target="device:aabbccddee01",
+            correlation_id="utterance-eva1",
+            payload={
+                "device_id": "aabbccddee01",
+                "session_id": "session-eva1",
+                "text": "奶龙在呢！",
+            },
+        ),
+        Message.create(
+            topic="voice.tool.completed",
+            kind=MessageKind.RESULT,
+            source="service:wake_gate",
+            target="device:aabbccddee01",
+            payload={
+                "device_id": "aabbccddee01",
+                "session_id": "session-eva1",
+                "utterance_id": "utterance-eva1",
+                "tool_name": "self_otto_walk_forward",
+                "action": "walk",
+                "command_id": "command-eva1",
+                "status": "completed",
+            },
+        ),
+        Message.create(
+            topic="audio.input.started",
+            kind=MessageKind.EVENT,
+            source="device:e2",
+            target="service:asr",
+            payload={
+                "device_id": "aabbccddee02",
+                "session_id": "session-eva2-new",
+                "utterance_id": "utterance-eva2-new",
+            },
+        ),
+        Message.create(
+            topic="voice.transcription.completed",
+            kind=MessageKind.RESULT,
+            source="service:asr",
+            target="device:aabbccddee02",
+            payload={
+                "device_id": "aabbccddee02",
+                "session_id": "session-eva2-old",
+                "utterance_id": "utterance-eva2-old",
+                "text": "迟到旧文本",
+            },
+        ),
+    ]
+    for message in messages:
+        await context.events.publish(message)
+
+    app = create_app(context)
+    transport = httpx.ASGITransport(app=app)
+    try:
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            response = await client.get("/api/v1/conversations")
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["count"] == 2
+        lanes = {item["device_id"]: item for item in body["items"]}
+        assert lanes["aabbccddee01"]["name"] == "EVA1"
+        assert lanes["aabbccddee01"]["state"] == "answering"
+        assert lanes["aabbccddee01"]["user_text"] == "请前进"
+        assert lanes["aabbccddee01"]["assistant_text"] == "奶龙在呢！"
+        assert lanes["aabbccddee01"]["tool_status"] == "completed"
+        assert lanes["aabbccddee01"]["action"] == "walk"
+        assert lanes["aabbccddee02"]["session_id"] == "session-eva2-new"
+        assert lanes["aabbccddee02"]["user_text"] == ""
+        assert "must-not-leak" not in response.text
+
+        await context.events.publish(
+            Message.create(
+                topic="audio.input.started",
+                kind=MessageKind.EVENT,
+                source="device:e1",
+                target="service:asr",
+                payload={
+                    "device_id": "aabbccddee01",
+                    "session_id": "session-eva1",
+                    "utterance_id": "utterance-eva1-next",
+                },
+            )
+        )
+        retained = {
+            item["device_id"]: item for item in await context.events.conversation_snapshot()
+        }
+        assert retained["aabbccddee01"]["user_text"] == "请前进"
+        assert retained["aabbccddee01"]["assistant_text"] == "奶龙在呢！"
+
+        await context.events.publish(
+            Message.create(
+                topic="voice.transcription.partial",
+                kind=MessageKind.EVENT,
+                source="service:asr",
+                target="device:aabbccddee01",
+                payload={
+                    "device_id": "aabbccddee01",
+                    "session_id": "session-eva1",
+                    "utterance_id": "utterance-eva1-next",
+                    "text": "下一轮",
+                },
+            )
+        )
+        speaking = {
+            item["device_id"]: item for item in await context.events.conversation_snapshot()
+        }
+        assert speaking["aabbccddee01"]["user_text"] == ""
+        assert speaking["aabbccddee01"]["assistant_text"] == ""
+        assert speaking["aabbccddee01"]["user_partial"] == "下一轮"
     finally:
         await _close_context(context)
 

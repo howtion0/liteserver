@@ -29,6 +29,7 @@ from ..config import AppConfig
 from ..dispatch.commands import DispatchRequestError
 from ..message_bus import MessageBus
 from ..messages import JsonValue, Message
+from ..services.conversation_control import ConversationControlError
 from ..storage.database import Database, sanitize_payload
 from .mqtt_broker import EmbeddedMqttBroker, MqttBrokerError
 
@@ -77,12 +78,30 @@ class CommandDispatchReader(Protocol):
     async def get_command(self, command_id: str) -> dict[str, Any] | None: ...
 
 
+class ConversationControlReader(Protocol):
+    async def control(
+        self,
+        *,
+        device_id: str,
+        command: Literal["start", "stop"],
+        source: str = "webui",
+        correlation_id: str | None = None,
+    ) -> dict[str, Any]: ...
+
+
 class DeviceWebsocketHandler(Protocol):
     async def handle(self, websocket: WebSocket) -> None: ...
 
 
 def _now() -> str:
     return datetime.now(UTC).isoformat().replace("+00:00", "Z")
+
+
+def _optional_text(value: Any, limit: int) -> str | None:
+    if not isinstance(value, str):
+        return None
+    normalized = value.strip()
+    return normalized[:limit] if normalized else None
 
 
 def _is_loopback(host: str) -> bool:
@@ -122,6 +141,30 @@ class ActionCommand(BaseModel):
     confirmation: bool = False
 
 
+class BatchActionCommand(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    device_ids: list[str] = Field(min_length=1, max_length=16)
+    action: str = Field(min_length=1, max_length=80)
+    parameters: dict[str, Any] = Field(default_factory=dict, max_length=32)
+    confirmation: bool = False
+
+
+class BatchStopCommand(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    device_ids: list[str] = Field(min_length=1, max_length=16)
+    confirmation: bool = False
+
+
+class BatchConversationCommand(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    device_ids: list[str] = Field(min_length=1, max_length=16)
+    command: Literal["start", "stop"]
+    confirmation: bool = False
+
+
 class SettingsUpdate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -143,10 +186,195 @@ class EventSubscription:
     queue: asyncio.Queue[dict[str, Any]]
 
 
+@dataclass(slots=True)
+class _ConversationLane:
+    device_id: str
+    session_id: str | None = None
+    utterance_id: str | None = None
+    state: str = "waiting"
+    user_partial: str = ""
+    user_text: str = ""
+    assistant_text: str = ""
+    tool_status: str | None = None
+    tool_name: str | None = None
+    action: str | None = None
+    command_id: str | None = None
+    error_code: str | None = None
+    reason: str | None = None
+    last_topic: str | None = None
+    updated_at: str | None = None
+
+    def reset_turn(self, *, session_id: str, utterance_id: str | None) -> None:
+        self.session_id = session_id
+        self.utterance_id = utterance_id
+        self.user_partial = ""
+        self.user_text = ""
+        self.assistant_text = ""
+        self.tool_status = None
+        self.tool_name = None
+        self.action = None
+        self.command_id = None
+        self.error_code = None
+        self.reason = None
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "device_id": self.device_id,
+            "session_id": self.session_id,
+            "utterance_id": self.utterance_id,
+            "state": self.state,
+            "user_partial": self.user_partial,
+            "user_text": self.user_text,
+            "assistant_text": self.assistant_text,
+            "tool_status": self.tool_status,
+            "tool_name": self.tool_name,
+            "action": self.action,
+            "command_id": self.command_id,
+            "error_code": self.error_code,
+            "reason": self.reason,
+            "last_topic": self.last_topic,
+            "updated_at": self.updated_at,
+        }
+
+
+_CONVERSATION_TOPICS = frozenset(
+    {
+        "audio.input.started",
+        "voice.session.state.changed",
+        "voice.session.closed",
+        "voice.transcription.partial",
+        "voice.transcription.completed",
+        "voice.transcription.displayed",
+        "voice.transcription.failed",
+        "tts.synthesis.started",
+        "tts.playback.failed",
+        "voice.tool.requested",
+        "voice.tool.completed",
+        "voice.tool.failed",
+    }
+)
+
+
+class ConversationProjection:
+    """Retain a bounded, redacted current conversation lane per device."""
+
+    def __init__(self, *, max_devices: int = 128, text_limit: int = 512) -> None:
+        if max_devices < 1 or text_limit < 16:
+            raise ValueError("conversation projection limits must be positive")
+        self.max_devices = max_devices
+        self.text_limit = text_limit
+        self._lanes: dict[str, _ConversationLane] = {}
+
+    def apply(self, message: Message, payload: Mapping[str, Any]) -> None:
+        if message.topic not in _CONVERSATION_TOPICS:
+            return
+        device_id = payload.get("device_id")
+        if not isinstance(device_id, str) or not device_id:
+            return
+        lane = self._lanes.get(device_id)
+        if lane is None:
+            if len(self._lanes) >= self.max_devices:
+                oldest = min(
+                    self._lanes.values(),
+                    key=lambda item: item.updated_at or "",
+                )
+                self._lanes.pop(oldest.device_id, None)
+            lane = _ConversationLane(device_id=device_id)
+            self._lanes[device_id] = lane
+
+        session_id = _optional_text(payload.get("session_id"), 128)
+        utterance_id = _optional_text(payload.get("utterance_id"), 128)
+        if message.topic == "audio.input.started" and session_id is not None:
+            if lane.session_id != session_id:
+                lane.reset_turn(session_id=session_id, utterance_id=utterance_id)
+            elif lane.utterance_id != utterance_id:
+                lane.utterance_id = utterance_id
+                lane.user_partial = ""
+                lane.error_code = None
+                lane.reason = None
+            lane.state = "starting"
+        elif session_id is not None:
+            if lane.session_id is None:
+                lane.reset_turn(session_id=session_id, utterance_id=utterance_id)
+            elif lane.session_id != session_id:
+                return
+            elif utterance_id is not None:
+                if lane.utterance_id not in {None, utterance_id}:
+                    return
+                lane.utterance_id = utterance_id
+
+        topic = message.topic
+        if topic == "voice.session.state.changed":
+            state = _optional_text(payload.get("state"), 64)
+            if state is not None:
+                lane.state = state
+            lane.error_code = _optional_text(payload.get("error_code"), 128)
+            lane.reason = _optional_text(payload.get("reason"), 128)
+        elif topic == "voice.session.closed":
+            lane.state = "waiting"
+            lane.reason = _optional_text(payload.get("reason"), 128)
+        elif topic == "voice.transcription.partial":
+            text = _optional_text(payload.get("text"), self.text_limit)
+            if text is not None:
+                if not lane.user_partial:
+                    lane.user_text = ""
+                    lane.assistant_text = ""
+                    lane.tool_status = None
+                    lane.tool_name = None
+                    lane.action = None
+                    lane.command_id = None
+                lane.user_partial = text
+        elif topic in {"voice.transcription.completed", "voice.transcription.displayed"}:
+            text = _optional_text(payload.get("text"), self.text_limit)
+            if text is not None:
+                lane.user_text = text
+                lane.user_partial = ""
+                lane.assistant_text = ""
+                lane.tool_status = None
+                lane.tool_name = None
+                lane.action = None
+                lane.command_id = None
+                lane.error_code = None
+        elif topic == "voice.transcription.failed":
+            lane.error_code = _optional_text(payload.get("error_code"), 128)
+        elif topic == "tts.synthesis.started":
+            text = _optional_text(payload.get("text"), self.text_limit)
+            if text is not None:
+                combined = f"{lane.assistant_text}{text}"
+                lane.assistant_text = combined[-self.text_limit :]
+        elif topic == "tts.playback.failed":
+            lane.error_code = _optional_text(payload.get("error_code"), 128)
+        elif topic.startswith("voice.tool."):
+            lane.tool_status = topic.rsplit(".", 1)[-1]
+            lane.tool_name = _optional_text(payload.get("tool_name"), 128)
+            lane.action = _optional_text(payload.get("action"), 80)
+            lane.command_id = _optional_text(payload.get("command_id"), 128)
+            lane.error_code = _optional_text(payload.get("error_code"), 128)
+
+        lane.last_topic = topic
+        lane.updated_at = message.created_at.isoformat().replace("+00:00", "Z")
+
+    def snapshot(self) -> list[dict[str, Any]]:
+        return [
+            lane.to_dict()
+            for lane in sorted(
+                self._lanes.values(),
+                key=lambda item: (item.updated_at or "", item.device_id),
+                reverse=True,
+            )
+        ]
+
+
 class EventHub:
     """Bounded in-memory event stream with process identity and cursor recovery."""
 
-    def __init__(self, *, history_size: int = 256, subscriber_queue_size: int = 64) -> None:
+    def __init__(
+        self,
+        *,
+        history_size: int = 256,
+        subscriber_queue_size: int = 64,
+        conversation_device_limit: int = 128,
+    ) -> None:
         if history_size < 1 or subscriber_queue_size < 1:
             raise ValueError("event history and subscriber queues must be non-empty")
         self.stream_id = str(uuid4())
@@ -156,6 +384,7 @@ class EventHub:
         self._stalled_subscribers: set[str] = set()
         self._cursor = 0
         self._lock = asyncio.Lock()
+        self._conversations = ConversationProjection(max_devices=conversation_device_limit)
 
     @property
     def cursor(self) -> int:
@@ -167,8 +396,11 @@ class EventHub:
 
     async def publish(self, message: Message) -> None:
         event = message.to_dict()
-        event["payload"] = sanitize_payload(message.payload)
+        sanitized_payload = sanitize_payload(message.payload)
+        event["payload"] = sanitized_payload
         async with self._lock:
+            if isinstance(sanitized_payload, Mapping):
+                self._conversations.apply(message, sanitized_payload)
             self._cursor += 1
             frame = {
                 "type": "event",
@@ -194,6 +426,10 @@ class EventHub:
                         }
                     )
                     self._stalled_subscribers.add(subscription_id)
+
+    async def conversation_snapshot(self) -> list[dict[str, Any]]:
+        async with self._lock:
+            return self._conversations.snapshot()
 
     async def read(
         self,
@@ -331,6 +567,7 @@ class WebContext:
     started_at: datetime
     started_monotonic: float
     device_websocket: DeviceWebsocketHandler | None = None
+    conversation_control: ConversationControlReader | None = None
 
 
 def _correlation_id(request: Request) -> str:
@@ -441,6 +678,129 @@ def _dispatch_api_error(exc: DispatchRequestError) -> ApiError:
     else:
         status_code = 503
     return ApiError(status_code, exc.code, exc.message)
+
+
+def _batch_device_ids(values: list[str]) -> tuple[str, ...]:
+    normalized: list[str] = []
+    for value in values:
+        if (
+            not isinstance(value, str)
+            or len(value) != 12
+            or value != value.lower()
+            or any(character not in "0123456789abcdef" for character in value)
+        ):
+            raise ApiError(
+                422,
+                "invalid_device_ids",
+                "batch targets must be lowercase 12-character device IDs",
+            )
+        normalized.append(value)
+    if len(normalized) != len(set(normalized)):
+        raise ApiError(422, "duplicate_device_ids", "batch targets must be unique")
+    return tuple(normalized)
+
+
+async def _submit_batch_action(
+    dispatcher: CommandDispatchReader,
+    device_id: str,
+    payload: BatchActionCommand,
+    correlation_id: str,
+) -> dict[str, Any]:
+    try:
+        command = await dispatcher.submit_action(
+            device_id=device_id,
+            action=payload.action,
+            parameters=cast(Mapping[str, JsonValue], payload.parameters),
+            confirmation=True,
+            source="webui:batch",
+            correlation_id=correlation_id,
+        )
+    except DispatchRequestError as exc:
+        return {
+            "device_id": device_id,
+            "accepted": False,
+            "error": {"code": exc.code, "message": exc.message},
+        }
+    except Exception:  # noqa: BLE001 - do not leak implementation details in batch results
+        return {
+            "device_id": device_id,
+            "accepted": False,
+            "error": {"code": "dispatch_failed", "message": "action dispatch failed"},
+        }
+    return {
+        "device_id": device_id,
+        "accepted": True,
+        "command_id": command.get("command_id"),
+        "status": command.get("status"),
+    }
+
+
+async def _submit_batch_stop(
+    dispatcher: CommandDispatchReader,
+    device_id: str,
+    correlation_id: str,
+) -> dict[str, Any]:
+    try:
+        command = await dispatcher.submit_stop(
+            device_id=device_id,
+            source="webui:batch",
+            correlation_id=correlation_id,
+        )
+    except DispatchRequestError as exc:
+        return {
+            "device_id": device_id,
+            "accepted": False,
+            "error": {"code": exc.code, "message": exc.message},
+        }
+    except Exception:  # noqa: BLE001 - do not leak implementation details in batch results
+        return {
+            "device_id": device_id,
+            "accepted": False,
+            "error": {"code": "dispatch_failed", "message": "stop dispatch failed"},
+        }
+    return {
+        "device_id": device_id,
+        "accepted": True,
+        "command_id": command.get("command_id"),
+        "status": command.get("status"),
+    }
+
+
+async def _submit_batch_conversation(
+    controller: ConversationControlReader,
+    device_id: str,
+    command: Literal["start", "stop"],
+    correlation_id: str,
+) -> dict[str, Any]:
+    try:
+        result = await controller.control(
+            device_id=device_id,
+            command=command,
+            source="webui:batch",
+            correlation_id=correlation_id,
+        )
+    except ConversationControlError as exc:
+        return {
+            "device_id": device_id,
+            "accepted": False,
+            "error": {"code": exc.code, "message": exc.message},
+        }
+    except Exception:  # noqa: BLE001 - batch API must not leak implementation details
+        return {
+            "device_id": device_id,
+            "accepted": False,
+            "error": {
+                "code": "conversation_control_failed",
+                "message": "conversation control failed",
+            },
+        }
+    return {
+        "device_id": device_id,
+        "accepted": True,
+        "command_id": result.get("command_id"),
+        "status": result.get("status"),
+        "transport": result.get("transport"),
+    }
 
 
 def create_app(context: WebContext) -> FastAPI:
@@ -590,6 +950,89 @@ def create_app(context: WebContext) -> FastAPI:
             actions = await context.database.fetch_device_actions(device_id)
         return {"device_id": device_id, "items": actions, "count": len(actions)}
 
+    @app.get("/api/v1/conversations")
+    async def list_conversations(request: Request) -> dict[str, Any]:
+        # Transcripts are not credentials, but they are private user content.
+        # Keep them behind the same console boundary as the live event stream.
+        _require_console_access(request, context.config)
+        projected = {
+            item["device_id"]: item for item in await context.events.conversation_snapshot()
+        }
+        if context.devices is not None:
+            devices = await context.devices.list_devices()
+        else:
+            devices = await context.database.list_devices(limit=500, offset=0)
+        components = context.component_status()
+        voice = components.get("voice_mvp", {})
+        runtime_sessions = voice.get("sessions", {})
+        if not isinstance(runtime_sessions, Mapping):
+            runtime_sessions = {}
+
+        items: list[dict[str, Any]] = []
+        all_device_ids = {str(item.get("device_id")) for item in devices if item.get("device_id")}
+        all_device_ids.update(projected)
+        all_device_ids.update(
+            str(device_id) for device_id in runtime_sessions if isinstance(device_id, str)
+        )
+        devices_by_id = {
+            str(item.get("device_id")): item for item in devices if item.get("device_id")
+        }
+        for device_id in all_device_ids:
+            device = devices_by_id.get(device_id, {})
+            lane: dict[str, Any] = {
+                "device_id": device_id,
+                "session_id": None,
+                "utterance_id": None,
+                "state": "waiting",
+                "user_partial": "",
+                "user_text": "",
+                "assistant_text": "",
+                "tool_status": None,
+                "tool_name": None,
+                "action": None,
+                "command_id": None,
+                "error_code": None,
+                "reason": None,
+                "last_topic": None,
+                "updated_at": None,
+            }
+            lane.update(projected.get(device_id, {}))
+            runtime_session = runtime_sessions.get(device_id)
+            if isinstance(runtime_session, Mapping):
+                runtime_state = _optional_text(runtime_session.get("state"), 64)
+                if runtime_state is not None:
+                    lane["state"] = runtime_state
+                runtime_session_id = _optional_text(runtime_session.get("session_id"), 128)
+                if runtime_session_id is not None:
+                    lane["session_id"] = runtime_session_id
+                failure_code = _optional_text(runtime_session.get("failure_code"), 128)
+                if failure_code is not None:
+                    lane["error_code"] = failure_code
+                exit_reason = _optional_text(runtime_session.get("exit_reason"), 128)
+                if exit_reason is not None:
+                    lane["reason"] = exit_reason
+                lane["round_id"] = runtime_session.get("round_id")
+                lane["turn_count"] = runtime_session.get("turn_count", 0)
+                lane["speech_detected"] = runtime_session.get("speech_detected", False)
+            lane.update(
+                {
+                    "name": device.get("name") or device_id,
+                    "device_status": device.get("status", "unknown"),
+                    "transport": device.get("transport"),
+                    "action_state": device.get("action_state", "unknown"),
+                }
+            )
+            items.append(lane)
+        items.sort(key=lambda item: (str(item.get("name", "")), item["device_id"]))
+        active_states = {"laughing", "listening", "recognizing", "answering"}
+        return {
+            "items": items,
+            "count": len(items),
+            "active_count": sum(item["state"] in active_states for item in items),
+            "stream_id": context.events.stream_id,
+            "cursor": context.events.cursor,
+        }
+
     @app.post("/api/v1/devices/{device_id}/verify")
     async def verify_device(device_id: str, request: Request) -> dict[str, Any]:
         _require_console_access(request, context.config)
@@ -617,6 +1060,36 @@ def create_app(context: WebContext) -> FastAPI:
             raise _dispatch_api_error(exc) from exc
         return JSONResponse(status_code=202, content=command)
 
+    @app.post("/api/v1/commands/actions/batch")
+    async def command_actions_batch(
+        payload: BatchActionCommand,
+        request: Request,
+    ) -> JSONResponse:
+        _require_console_access(request, context.config)
+        if context.dispatcher is None:
+            raise _component_not_ready("dispatcher")
+        if payload.confirmation is not True:
+            raise ApiError(422, "confirmation_required", "batch action requires confirmation")
+        device_ids = _batch_device_ids(payload.device_ids)
+        batch_id = _correlation_id(request)
+        items = await asyncio.gather(
+            *(
+                _submit_batch_action(context.dispatcher, device_id, payload, batch_id)
+                for device_id in device_ids
+            )
+        )
+        accepted = sum(item["accepted"] is True for item in items)
+        return JSONResponse(
+            status_code=202,
+            content={
+                "batch_id": batch_id,
+                "requested": len(items),
+                "accepted": accepted,
+                "failed": len(items) - accepted,
+                "items": items,
+            },
+        )
+
     @app.get("/api/v1/commands/{command_id}")
     async def get_command(command_id: str) -> dict[str, Any]:
         if context.dispatcher is None:
@@ -639,6 +1112,76 @@ def create_app(context: WebContext) -> FastAPI:
         except DispatchRequestError as exc:
             raise _dispatch_api_error(exc) from exc
         return JSONResponse(status_code=202, content=command)
+
+    @app.post("/api/v1/commands/stops/batch")
+    async def command_stops_batch(
+        payload: BatchStopCommand,
+        request: Request,
+    ) -> JSONResponse:
+        _require_console_access(request, context.config)
+        if context.dispatcher is None:
+            raise _component_not_ready("dispatcher")
+        if payload.confirmation is not True:
+            raise ApiError(422, "confirmation_required", "batch stop requires confirmation")
+        device_ids = _batch_device_ids(payload.device_ids)
+        batch_id = _correlation_id(request)
+        items = await asyncio.gather(
+            *(
+                _submit_batch_stop(context.dispatcher, device_id, batch_id)
+                for device_id in device_ids
+            )
+        )
+        accepted = sum(item["accepted"] is True for item in items)
+        return JSONResponse(
+            status_code=202,
+            content={
+                "batch_id": batch_id,
+                "requested": len(items),
+                "accepted": accepted,
+                "failed": len(items) - accepted,
+                "items": items,
+            },
+        )
+
+    @app.post("/api/v1/commands/conversations/batch")
+    async def command_conversations_batch(
+        payload: BatchConversationCommand,
+        request: Request,
+    ) -> JSONResponse:
+        _require_console_access(request, context.config)
+        if context.conversation_control is None:
+            raise _component_not_ready("conversation control")
+        if payload.confirmation is not True:
+            raise ApiError(
+                422,
+                "confirmation_required",
+                "batch conversation control requires confirmation",
+            )
+        device_ids = _batch_device_ids(payload.device_ids)
+        batch_id = _correlation_id(request)
+        items = await asyncio.gather(
+            *(
+                _submit_batch_conversation(
+                    context.conversation_control,
+                    device_id,
+                    payload.command,
+                    batch_id,
+                )
+                for device_id in device_ids
+            )
+        )
+        accepted = sum(item["accepted"] is True for item in items)
+        return JSONResponse(
+            status_code=202,
+            content={
+                "batch_id": batch_id,
+                "command": payload.command,
+                "requested": len(items),
+                "accepted": accepted,
+                "failed": len(items) - accepted,
+                "items": items,
+            },
+        )
 
     @app.post("/api/v1/cluster/stop")
     async def stop_cluster(request: Request) -> JSONResponse:

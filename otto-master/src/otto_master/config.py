@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import os
 import re
 from collections.abc import Mapping
@@ -114,6 +115,7 @@ class AudioConfig:
     channels: int
     frame_duration_ms: int
     format: str
+    tts_pcm_gain: float = 1.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -292,13 +294,24 @@ def _websocket_path(section: Mapping[str, Any]) -> str:
     return value
 
 
-def _float(section: Mapping[str, Any], name: str, path: str, *, minimum: float | None = None) -> float:
+def _float(
+    section: Mapping[str, Any],
+    name: str,
+    path: str,
+    *,
+    minimum: float | None = None,
+    maximum: float | None = None,
+) -> float:
     value = section.get(name)
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         raise ConfigError(f"{path}.{name} must be a number")
     result = float(value)
+    if not math.isfinite(result):
+        raise ConfigError(f"{path}.{name} must be finite")
     if minimum is not None and result < minimum:
         raise ConfigError(f"{path}.{name} must be at least {minimum}")
+    if maximum is not None and result > maximum:
+        raise ConfigError(f"{path}.{name} must be at most {maximum}")
     return result
 
 
@@ -614,6 +627,13 @@ def load_config(
             channels=_int(audio, "channels", "audio", minimum=1),
             frame_duration_ms=_int(audio, "frame_duration_ms", "audio", minimum=1),
             format=_string(audio, "format", "audio"),
+            tts_pcm_gain=_float(
+                audio,
+                "tts_pcm_gain",
+                "audio",
+                minimum=0.25,
+                maximum=4.0,
+            ),
         ),
         wake=WakeConfig(
             command_timeout_seconds=_float(wake, "command_timeout_seconds", "wake", minimum=0.1),

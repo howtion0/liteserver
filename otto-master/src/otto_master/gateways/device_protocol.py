@@ -21,7 +21,16 @@ QUERY_TYPES = {
 }
 ACTION_COMMAND_TOPIC = "device.action.execute.requested"
 STOP_COMMAND_TOPIC = "device.stop.execute.requested"
-OUTBOUND_COMMAND_TOPICS = (*QUERY_TYPES, ACTION_COMMAND_TOPIC, STOP_COMMAND_TOPIC)
+CONVERSATION_COMMAND_TYPES = {
+    "device.conversation.start.requested": "start",
+    "device.conversation.stop.requested": "stop",
+}
+OUTBOUND_COMMAND_TOPICS = (
+    *QUERY_TYPES,
+    ACTION_COMMAND_TOPIC,
+    STOP_COMMAND_TOPIC,
+    *CONVERSATION_COMMAND_TYPES,
+)
 SUPPORTED_DEVICE_TRANSPORTS = frozenset({"mqtt", "tcp", "websocket"})
 _ACTION_RESERVED_FIELDS = frozenset({"type", "id", "action"})
 
@@ -265,13 +274,41 @@ def _runtime_sound(value: dict[str, Any]) -> tuple[Any, Any]:
             sound = otto.get("sound")
             if isinstance(sound, dict):
                 busy = sound.get("busy", busy)
-                sound_name = sound.get("name", sound_name)
+                sound_name = sound.get("name", sound.get("action_sound", sound_name))
     return busy, sound_name
+
+
+def _runtime_display(value: dict[str, Any]) -> tuple[Any, Any]:
+    active = value.get("display_action_image_active")
+    alias = value.get("display_image_alias")
+    runtime = value.get("runtime")
+    if isinstance(runtime, dict):
+        otto = runtime.get("otto")
+        if isinstance(otto, dict):
+            display = otto.get("display")
+            if isinstance(display, dict):
+                active = display.get("action_image_active", active)
+                alias = display.get("image_alias", alias)
+    return active, alias
+
+
+def _runtime_output_volume(value: dict[str, Any]) -> Any:
+    volume = value.get("output_volume")
+    runtime = value.get("runtime")
+    if isinstance(runtime, dict):
+        otto = runtime.get("otto")
+        if isinstance(otto, dict):
+            audio = otto.get("audio")
+            if isinstance(audio, dict):
+                volume = audio.get("output_volume", volume)
+    return volume
 
 
 def _state(device_id: str, transport: str, value: dict[str, Any]) -> Message:
     action_state, current_action = _runtime_action(value)
     sound_busy, sound_name = _runtime_sound(value)
+    display_active, display_alias = _runtime_display(value)
+    output_volume = _runtime_output_volume(value)
     if action_state not in {"unknown", "idle", "moving"}:
         raise DeviceProtocolError("state must contain a known action state")
     if current_action is not None and (
@@ -297,6 +334,24 @@ def _state(device_id: str, transport: str, value: dict[str, Any]) -> Message:
         ):
             raise DeviceProtocolError("sound name must be a bounded non-empty string or null")
         payload["sound_name"] = sound_name.strip()
+    if display_active is not None:
+        if not isinstance(display_active, bool):
+            raise DeviceProtocolError("display action image active must be a boolean")
+        payload["display_action_image_active"] = display_active
+    if display_alias is not None:
+        if (
+            not isinstance(display_alias, str)
+            or not display_alias.strip()
+            or len(display_alias.strip()) > 80
+        ):
+            raise DeviceProtocolError("display image alias must be a bounded non-empty string")
+        payload["display_image_alias"] = display_alias.strip()
+    if output_volume is not None:
+        if isinstance(output_volume, bool) or not isinstance(output_volume, int):
+            raise DeviceProtocolError("output volume must be an integer")
+        if output_volume < 0 or output_volume > 100:
+            raise DeviceProtocolError("output volume must be between 0 and 100")
+        payload["output_volume"] = output_volume
     return _message(
         device_id=device_id,
         transport=transport,
@@ -405,6 +460,39 @@ def _error(device_id: str, transport: str, value: dict[str, Any]) -> Message:
     )
 
 
+def _conversation_ack(
+    device_id: str,
+    transport: str,
+    value: dict[str, Any],
+) -> Message:
+    external_id = required_string(value, "id", maximum=128)
+    command = required_string(value, "command", maximum=16)
+    if command not in {"start", "stop"}:
+        raise DeviceProtocolError("conversation ack command must be start or stop")
+    ok = value.get("ok")
+    if not isinstance(ok, bool):
+        raise DeviceProtocolError("conversation ack ok must be a boolean")
+    error = value.get("error")
+    if error is not None and (not isinstance(error, str) or len(error) > 512):
+        raise DeviceProtocolError("conversation ack error must be a bounded string")
+    payload = _base_payload(device_id, transport, external_id)
+    payload.update({"accepted": ok, "command": command})
+    if isinstance(error, str):
+        payload["error"] = error
+    return _message(
+        device_id=device_id,
+        transport=transport,
+        topic=(
+            "device.conversation.control.accepted"
+            if ok
+            else "device.conversation.control.failed"
+        ),
+        kind=MessageKind.RESULT,
+        payload=payload,
+        correlation_id=external_id,
+    )
+
+
 def translate_otto_value(
     device_id: str,
     value: dict[str, Any],
@@ -452,6 +540,8 @@ def translate_otto_value(
         return _ack(normalized_id, transport, value, stop=False)
     if message_type == "otto_stop_ack":
         return _ack(normalized_id, transport, value, stop=True)
+    if message_type == "otto_conversation_ack":
+        return (_conversation_ack(normalized_id, transport, value),)
     if message_type == "error":
         return (_error(normalized_id, transport, value),)
     raise DeviceProtocolError(f"unsupported device message type: {message_type}")
@@ -561,11 +651,17 @@ def encode_otto_command(message: Message, *, transport: str) -> EncodedOttoComma
         }
     else:
         external_id = _outbound_command_id(message)
-        external_payload = (
-            _action_payload(message, external_id)
-            if message.topic == ACTION_COMMAND_TOPIC
-            else {"type": "stop", "id": external_id}
-        )
+        conversation_command = CONVERSATION_COMMAND_TYPES.get(message.topic)
+        if message.topic == ACTION_COMMAND_TOPIC:
+            external_payload = _action_payload(message, external_id)
+        elif conversation_command is not None:
+            external_payload = {
+                "type": "otto_conversation",
+                "id": external_id,
+                "command": conversation_command,
+            }
+        else:
+            external_payload = {"type": "stop", "id": external_id}
     payload = json.dumps(
         external_payload,
         ensure_ascii=False,
