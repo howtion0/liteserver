@@ -160,7 +160,8 @@ Phase 4A检查点（`test0.4`）只完成不移动设备的上行联调端：
 - [x] SQLite schema v2保存设备快照与动作目录，重启不伪造online
 - [x] Web列表、详情、动作目录和事件流读取实时Manager状态
 - [x] 两个fake设备通过受保护OTA和真实Broker同时联调且无动作下行
-- [ ] MQTT精确down查询、动作、stop和完整命令生命周期
+- [x] Phase 4B精确down状态/动作目录查询、correlation、超时与只读验证报告
+- [ ] MQTT动作、stop和完整命令生命周期
 - [ ] TCP回退、Xiaozhi WebSocket、固件改造与EVA1/EVA2真机验收
 
 验收：

@@ -56,6 +56,12 @@ device.state.changed
 device.transport.unavailable
 device.transport.changed
 device.actions.catalog.received
+device.state.query.requested
+device.actions.query.requested
+device.command.published
+device.command.failed
+device.verification.requested
+device.verification.completed
 audio.input.started
 audio.input.frame
 audio.input.finished
@@ -149,3 +155,5 @@ MQTT外部Topic和JSON合同见 `docs/MQTT_CONTROL_CONTRACT.md`。Gateway转换�
 - MQTT响应的外部 `id` 映射到内部correlation链；重复外部ID不能产生第二次执行。
 
 Phase 4A实现说明：Gateway已生成`device.connected`、`device.heartbeat.received`、`device.state.received`、`device.actions.catalog.received`及ACK/error结果；Manager生成`device.state.changed`快照。外部ID到内部命令仓库的完整关联和重复执行保护尚未实现。
+
+Phase 4B实现说明：Verifier发布`device.state.query.requested`和`device.actions.query.requested`；Gateway只将这两个白名单命令编码为精确设备down消息，并生成`device.command.published|failed`。设备响应的外部`id`进入内部`correlation_id`，Verifier再同时核对响应topic和target。动作命令的完整持久关联仍未实现。

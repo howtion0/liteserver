@@ -41,6 +41,19 @@
 
 ## 最近记录
 
+### 2026-09-18 / Phase 4B / MQTT只读下行与连接验证
+
+- 版本：`0.4.1`
+- Git迭代：`test0.5`，基线为已推送的 `test0.4` / `3d46780a89f2c1955f673ccfbad349b8f342c941`
+- 目标：在不移动设备的前提下，从受保护Browser API经Message Bus和Master MQTT Client向单设备精确下发状态/动作目录查询，并验证业务响应而非仅publish成功。
+- 修改：Gateway增加只读命令白名单、精确down编码、QoS 0/non-retain publish及结果指标；新增Device Verifier预检、pending correlation、超时/故障中断和逐步报告；Runtime/Web接入`POST /api/v1/devices/{device_id}/verify`。
+- 安全：浏览器不能提供Topic或原始MQTT JSON；仅允许`otto_query`与`otto_actions`；响应必须同时匹配ID、内部topic和device target；本轮不发送action/stop。
+- 本机验证：`uv lock --check`、Ruff、mypy、前端JS语法均PASS；`pytest -q` 53 PASS。真实Broker中验证EVA1 fake只触达自己的down Topic，两个命令均QoS 0/non-retain，EVA2无串线；EVA2无响应路径按0.2秒失败且pending为0。
+- 返工：首次mypy发现可选响应和动作列表未被布尔别名正确收窄，改为显式`is None`/`isinstance`后类型检查与回归通过；补充错误target和错误ID均不能完成请求。
+- 未运行：EVA1/EVA2真机、动作/stop、命令队列、固件改造、TCP/WebSocket兼容、云服务和实体Windows局域网。
+- 状态：Phase 4B本地门禁PASS；完整Phase 4仍进行中，等待本轮macOS/Windows CI和远程哈希核对。
+- 下一步：实现持久命令仓库、每设备有序动作/stop及fake设备完整状态生命周期。
+
 ### 2026-09-18 / Phase 4A / MQTT假设备只读联调端
 
 - 版本：`0.4.0`

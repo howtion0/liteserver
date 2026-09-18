@@ -61,6 +61,40 @@ async def _publish_device(
     )
 
 
+async def _respond_to_read_only_verification(
+    client: MQTTClient,
+    provisioning: dict[str, object],
+) -> list[dict[str, object]]:
+    received: list[dict[str, object]] = []
+    for expected_type in ("otto_query", "otto_actions"):
+        packet = await client.deliver_message(timeout_duration=2)
+        assert packet is not None
+        assert packet.qos == 0
+        assert packet.retain is False
+        payload = json.loads(bytes(packet.data))
+        assert payload["type"] == expected_type
+        assert isinstance(payload["id"], str)
+        received.append(payload)
+        if expected_type == "otto_query":
+            response: dict[str, object] = {
+                "type": "otto_state",
+                "id": payload["id"],
+                "action_state": "idle",
+                "current_action": None,
+            }
+        else:
+            response = {
+                "type": "otto_actions",
+                "id": payload["id"],
+                "actions": [
+                    {"name": "device-1-only"},
+                    {"name": "swing", "parameters": {"steps": "integer"}},
+                ],
+            }
+        await _publish_device(client, provisioning, response)
+    return received
+
+
 async def _wait_for_two_online(client: httpx.AsyncClient) -> list[dict[str, object]]:
     loop = asyncio.get_running_loop()
     deadline = loop.time() + 5
@@ -274,6 +308,7 @@ async def test_runtime_two_fake_devices_read_only_mqtt_integration(tmp_path: Pat
             heartbeat_stale_seconds=0.5,
             heartbeat_offline_seconds=1.0,
             gateway_reconnect_seconds=0.1,
+            query_timeout_seconds=0.2,
         ),
         discovery=replace(loaded.discovery, enabled=False),
         secrets=RuntimeSecrets(
@@ -377,6 +412,34 @@ async def test_runtime_two_fake_devices_read_only_mqtt_integration(tmp_path: Pat
             for mqtt_client in fake_clients:
                 with pytest.raises(TimeoutError):
                     await mqtt_client.deliver_message(timeout_duration=0.1)
+
+            responder = asyncio.create_task(
+                _respond_to_read_only_verification(fake_clients[0], provisioned[0])
+            )
+            verified = await client.post("/api/v1/devices/aabbccddee01/verify")
+            down_messages = await responder
+            assert verified.status_code == 200
+            assert verified.json()["passed"] is True
+            assert verified.json()["action_state"] == "idle"
+            assert verified.json()["actions_count"] == 2
+            assert [item["type"] for item in down_messages] == [
+                "otto_query",
+                "otto_actions",
+            ]
+            assert down_messages[0]["id"] != down_messages[1]["id"]
+            with pytest.raises(TimeoutError):
+                await fake_clients[1].deliver_message(timeout_duration=0.1)
+
+            timed_out = await client.post("/api/v1/devices/aabbccddee02/verify")
+            assert timed_out.status_code == 200
+            assert timed_out.json()["passed"] is False
+            assert "timed out" in timed_out.json()["failure"]
+            assert runtime.device_verifier.pending_count == 0
+
+            events = await client.get("/api/v1/events", params={"limit": 256})
+            event_topics = {item["event"]["topic"] for item in events.json()["items"]}
+            assert "device.command.published" in event_topics
+            assert "device.verification.completed" in event_topics
 
             await runtime.device_mqtt.shutdown()
             await runtime.message_bus.drain()

@@ -50,6 +50,18 @@ class FakeDeviceReader:
         return [{"name": "swing"}] if device_id.endswith("01") else [{"name": "walk"}]
 
 
+class FakeDeviceVerifier:
+    async def verify(self, device_id: str) -> dict[str, Any] | None:
+        if device_id != "aabbccddee01":
+            return None
+        return {
+            "verification_id": "verify-1",
+            "device_id": device_id,
+            "passed": True,
+            "checks": [{"name": "state_query", "status": "pass"}],
+        }
+
+
 def _free_port() -> int:
     with socket.socket() as listener:
         listener.bind(("127.0.0.1", 0))
@@ -125,6 +137,7 @@ async def _context(config: Any) -> WebContext:
         mqtt_broker=broker,
         events=events,
         devices=None,
+        verifier=None,
         component_status=components,
         started_at=datetime.now(UTC),
         started_monotonic=monotonic(),
@@ -274,6 +287,27 @@ async def test_device_read_apis_use_live_manager_snapshot(tmp_path: Path) -> Non
             "items": [{"name": "swing"}],
             "count": 1,
         }
+        assert missing.status_code == 404
+        assert missing.json()["error"]["code"] == "device_not_found"
+    finally:
+        await _close_context(context)
+
+
+async def test_device_verify_api_uses_protected_verifier_and_returns_404(
+    tmp_path: Path,
+) -> None:
+    context = await _context(_config(tmp_path))
+    context.verifier = FakeDeviceVerifier()
+    app = create_app(context)
+    transport = httpx.ASGITransport(app=app)
+    try:
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            verified = await client.post("/api/v1/devices/aabbccddee01/verify")
+            missing = await client.post("/api/v1/devices/aabbccddee99/verify")
+
+        assert verified.status_code == 200
+        assert verified.json()["passed"] is True
+        assert verified.json()["checks"][0]["name"] == "state_query"
         assert missing.status_code == 404
         assert missing.json()["error"]["code"] == "device_not_found"
     finally:

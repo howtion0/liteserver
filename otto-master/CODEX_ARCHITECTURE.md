@@ -119,7 +119,7 @@ Gateway or Storage consumes output
 - 将Dispatcher的单设备命令编码后发布到精确down Topic。
 - 维护MQTT连接重试、命令超时和协议级指标。
 
-当前实现边界：Phase 4A已实现安全上行、重连和协议指标；精确down发布、命令超时关联与Dispatcher接入留在后续Phase 4检查点。
+当前实现边界：Phase 4A已实现安全上行、重连和协议指标；Phase 4B已实现白名单只读查询的精确down发布和结果指标。动作/stop编码与Dispatcher接入留在后续Phase 4检查点。
 
 规则：
 
@@ -193,6 +193,15 @@ Session职责：
 - 区分 `accepted`、`moving` 和 `completed`，不能把MQTT立即ACK当作动作完成。
 
 当前实现边界：Phase 4A的Session保存身份、连接状态、固件、动态IP、能力、动作状态和动作目录；短期音频、串行动作队列及completed关联尚未实现。
+
+### 6.1 Device Verifier
+
+文件：`devices/verifier.py`
+
+- 只通过Message Bus发起状态和动作目录查询，不直接访问MQTT Client。
+- 验证Broker/Gateway健康、唯一online Session、实际传输、心跳和设备能力。
+- pending请求同时匹配correlation ID、响应topic和device target；超时、断线和Runtime关闭均失败关闭。
+- 输出逐步验证报告，不把MQTT publish成功当成设备连接验证通过。
 
 推荐状态：
 

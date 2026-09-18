@@ -45,6 +45,10 @@ class DeviceReader(Protocol):
     ) -> list[dict[str, JsonValue]] | None: ...
 
 
+class DeviceVerificationReader(Protocol):
+    async def verify(self, device_id: str) -> dict[str, Any] | None: ...
+
+
 def _now() -> str:
     return datetime.now(UTC).isoformat().replace("+00:00", "Z")
 
@@ -289,6 +293,7 @@ class WebContext:
     mqtt_broker: EmbeddedMqttBroker
     events: EventHub
     devices: DeviceReader | None
+    verifier: DeviceVerificationReader | None
     component_status: ComponentStatusProvider
     started_at: datetime
     started_monotonic: float
@@ -523,9 +528,13 @@ def create_app(context: WebContext) -> FastAPI:
 
     @app.post("/api/v1/devices/{device_id}/verify")
     async def verify_device(device_id: str, request: Request) -> dict[str, Any]:
-        del device_id
         _require_console_access(request, context.config)
-        raise _component_not_ready("device verification")
+        if context.verifier is None:
+            raise _component_not_ready("device verification")
+        report = await context.verifier.verify(device_id)
+        if report is None:
+            raise ApiError(404, "device_not_found", "device does not exist")
+        return report
 
     @app.post("/api/v1/commands/action")
     async def command_action(payload: ActionCommand, request: Request) -> dict[str, Any]:
