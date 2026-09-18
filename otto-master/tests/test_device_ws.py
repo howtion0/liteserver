@@ -13,6 +13,7 @@ from websockets.asyncio.client import ClientConnection, connect
 from websockets.exceptions import ConnectionClosed, InvalidStatus
 
 from otto_master.config import LoggingConfig, RuntimeSecrets, load_config
+from otto_master.gateways.device_ws import DevicePlaybackError
 from otto_master.messages import Message
 from otto_master.runtime import Runtime
 
@@ -183,6 +184,7 @@ async def test_xiaozhi_websocket_v1_runtime_audio_queries_actions_and_cleanup(
             max_frame_bytes=1024,
             audio_buffer_frames_per_device=2,
         ),
+        device_udp=replace(loaded.device_udp, enabled=False),
         dispatch=replace(
             loaded.dispatch,
             queue_size_per_device=4,
@@ -241,6 +243,7 @@ async def test_xiaozhi_websocket_v1_runtime_audio_queries_actions_and_cleanup(
                 assert server_hello["audio_params"]["format"] == "opus"
                 session_id = server_hello["session_id"]
                 assert isinstance(session_id, str) and session_id
+                await websocket.send(b"wake-word-preroll")
 
                 device = await _wait_device(runtime, status="online")
                 assert device["transport"] == "websocket"
@@ -326,6 +329,26 @@ async def test_xiaozhi_websocket_v1_runtime_audio_queries_actions_and_cleanup(
                         {
                             "type": "listen",
                             "session_id": session_id,
+                            "state": "start",
+                            "mode": "auto",
+                        }
+                    )
+                )
+                await websocket.send(
+                    json.dumps(
+                        {
+                            "type": "listen",
+                            "session_id": session_id,
+                            "state": "vad",
+                            "speaking": True,
+                        }
+                    )
+                )
+                await websocket.send(
+                    json.dumps(
+                        {
+                            "type": "listen",
+                            "session_id": session_id,
                             "state": "stop",
                         }
                     )
@@ -333,20 +356,40 @@ async def test_xiaozhi_websocket_v1_runtime_audio_queries_actions_and_cleanup(
                 frames = await _wait_audio_messages(observed, 3)
                 await runtime.message_bus.drain()
                 assert runtime.device_websocket.status()["audio_frames_buffered"] == 2
+                assert (
+                    runtime.device_websocket.status()[
+                        "prelisten_audio_frames_dropped"
+                    ]
+                    == 1
+                )
                 assert {
                     "audio.input.started",
                     "audio.input.finished",
+                    "audio.input.activity",
                     "voice.wake.candidate.received",
                 }.issubset({message.topic for message in observed})
-                started = next(
+                activity = next(
+                    message
+                    for message in observed
+                    if message.topic == "audio.input.activity"
+                )
+                assert activity.payload["speaking"] is True
+                started_messages = [
                     message for message in observed if message.topic == "audio.input.started"
-                )
-                finished = next(
+                ]
+                finished_messages = [
                     message for message in observed if message.topic == "audio.input.finished"
-                )
+                ]
+                assert len(started_messages) == 2
+                assert len(finished_messages) == 2
+                started = started_messages[0]
+                finished = finished_messages[0]
                 utterance_id = str(started.payload["utterance_id"])
                 assert finished.payload["utterance_id"] == utterance_id
                 assert finished.payload["frame_count"] == 3
+                assert finished.payload["reason"] == "listen_restarted"
+                assert finished_messages[1].payload["frame_count"] == 0
+                assert finished_messages[1].payload["reason"] == "listen_stop"
                 assert [message.payload["sequence"] for message in frames] == [0, 1, 2]
                 assert all(
                     message.payload["utterance_id"] == utterance_id
@@ -377,6 +420,49 @@ async def test_xiaozhi_websocket_v1_runtime_audio_queries_actions_and_cleanup(
                 assert await runtime.device_websocket.take_audio_frame(
                     DEVICE_ID, utterance_id, 2, frame_refs[2]
                 ) == b"\x04\x05\x06"
+
+                with pytest.raises(DevicePlaybackError, match="device_session_changed"):
+                    await runtime.device_websocket.send_transcription(
+                        DEVICE_ID,
+                        "stale-session",
+                        "不应发送",
+                    )
+                await runtime.device_websocket.send_transcription(
+                    DEVICE_ID,
+                    session_id,
+                    "  你是谁？  ",
+                )
+                assert await _receive_json(websocket) == {
+                    "session_id": session_id,
+                    "type": "stt",
+                    "text": "你是谁？",
+                }
+                assert runtime.device_websocket.status()["transcriptions_sent"] == 1
+
+                playback = await runtime.device_websocket.start_tts_playback(DEVICE_ID)
+                assert await _receive_json(websocket) == {
+                    "session_id": session_id,
+                    "type": "tts",
+                    "state": "start",
+                }
+                await playback.send_sentence("你好。")
+                assert await _receive_json(websocket) == {
+                    "session_id": session_id,
+                    "type": "tts",
+                    "state": "sentence_start",
+                    "text": "你好。",
+                }
+                await playback.send_audio(b"\x11\x22\x33")
+                output_audio = await asyncio.wait_for(websocket.recv(), timeout=2)
+                assert output_audio == b"\x11\x22\x33"
+                await playback.stop()
+                assert await _receive_json(websocket) == {
+                    "session_id": session_id,
+                    "type": "tts",
+                    "state": "stop",
+                }
+                await playback.stop()
+                assert runtime.device_websocket.status()["audio_frames_sent"] == 1
 
                 action_response = await client.post(
                     "/api/v1/commands/action",
@@ -478,8 +564,13 @@ async def test_xiaozhi_websocket_v1_runtime_audio_queries_actions_and_cleanup(
                     replacement_device = await _wait_device(runtime, status="online")
                     assert replacement_device["transport"] == "websocket"
                     await replacement.send(b"\x01")
-                    with pytest.raises(ConnectionClosed):
-                        await replacement.recv()
+                    await asyncio.sleep(0.05)
+                    assert (
+                        runtime.device_websocket.status()[
+                            "prelisten_audio_frames_dropped"
+                        ]
+                        == 2
+                    )
 
                 await _wait_device(runtime, status="offline")
     finally:

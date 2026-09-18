@@ -32,6 +32,8 @@ class DeviceSession:
     last_heartbeat_at: datetime | None = None
     action_state: DeviceActionState = DeviceActionState.UNKNOWN
     current_action: str | None = None
+    sound_busy: bool | None = None
+    sound_name: str | None = None
     actions: tuple[dict[str, JsonValue], ...] = ()
     actions_updated_at: datetime | None = None
     enabled: bool = True
@@ -125,9 +127,22 @@ class DeviceSession:
             action_state = DeviceActionState.UNKNOWN
         current_action = payload.get("current_action")
         normalized_action = current_action if isinstance(current_action, str) else None
-        changed = action_state is not self.action_state or normalized_action != self.current_action
+        raw_sound_busy = payload.get("sound_busy")
+        sound_busy = raw_sound_busy if isinstance(raw_sound_busy, bool) else self.sound_busy
+        raw_sound_name = payload.get("sound_name")
+        sound_name = (
+            raw_sound_name if isinstance(raw_sound_name, str) else self.sound_name
+        )
+        changed = (
+            action_state is not self.action_state
+            or normalized_action != self.current_action
+            or sound_busy is not self.sound_busy
+            or sound_name != self.sound_name
+        )
         self.action_state = action_state
         self.current_action = normalized_action
+        self.sound_busy = sound_busy
+        self.sound_name = sound_name
         return changed
 
     def apply_actions(
@@ -217,6 +232,8 @@ class DeviceSession:
     def _clear_transport_state(self) -> None:
         self.action_state = DeviceActionState.UNKNOWN
         self.current_action = None
+        self.sound_busy = None
+        self.sound_name = None
         self.actions = ()
         self.actions_updated_at = None
 
@@ -238,6 +255,8 @@ class DeviceSession:
             "last_heartbeat_at": isoformat(self.last_heartbeat_at),
             "action_state": self.action_state.value,
             "current_action": self.current_action,
+            "sound_busy": self.sound_busy,
+            "sound_name": self.sound_name,
             "actions_count": len(self.actions),
             "actions_updated_at": isoformat(self.actions_updated_at),
             "enabled": self.enabled,

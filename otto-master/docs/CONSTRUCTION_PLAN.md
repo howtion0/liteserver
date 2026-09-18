@@ -4,6 +4,8 @@
 
 ## 总路线
 
+下表是最初的能力Phase与产品版本地图，不是已经使用的Git检查点编号。实际施工因增加4A-4E和纵向MVP检查点而顺延，当前真实支线序列见表后说明。
+
 ```text
 Recovery version 0.1.0  branch test0.1  Phase 0 + Phase 1恢复基线
 Phase 2  version 0.2.0  branch test0.2  SQLite持久化与迁移
@@ -18,6 +20,8 @@ MVP      version 1.0.0  branch test1.0  EVA1/EVA2完整链路通过
 ```
 
 Phase 0和Phase 1已在强制门禁建立前完成但没有GitHub检查点，因此不得伪造两段历史；`test0.1` 是一次性恢复基线。支线编号是连续施工检查点，不是产品版本。若中途增加修复检查点，使用下一个自然编号，后续阶段顺延，不复用旧编号，也不特别处理 `test0.9` 到 `test1.0` 的变化。
+
+实际检查点为：`test0.1=Phase 0+1`、`test0.2=Phase 2`、`test0.3=Phase 3`、`test0.4-0.8=Phase 4A-4E`、`test0.9=EVA1语音/WakeGate/单设备工具纵向MVP`。下一未占用支线是`test1.0`，用于多设备WebUI与并发会话可视化，不代表整个1.0.0 MVP已完成。
 
 ## 2026-09-18最快MVP关键路径
 
@@ -211,9 +215,9 @@ Phase 4A检查点（`test0.4`）只完成不移动设备的上行联调端：
 
 ## Phase 5：Opus与云端ASR/TTS
 
-目标：打通语音上行和语音回传，不接LLM动作。
+目标：打通语音上行和语音回传。Phase 5原始边界只包含LLM文本问答；`test0.9`为最快纵向MVP提前拉入了Phase 7的“当前语音设备单工具”安全切片，但没有开放分组或广播自然语言控制。
 
-Provider和协议已经通过独立烟测冻结，完整设计、数据流、实测证据和复用边界见 `docs/VOLCENGINE_SPEECH_INTEGRATION.md`。烟测通过只证明云协议可行，不表示Phase 5已经开始或完成。
+Provider和协议已经通过独立烟测冻结；`test0.9`又完成EVA1的MQTT+加密UDP单机纵向MVP。完整设计、数据流、实测证据和剩余范围见 `docs/VOLCENGINE_SPEECH_INTEGRATION.md`。单机闭环不等于双设备、双Profile和Windows门禁全部完成。
 
 实现：
 
@@ -224,20 +228,43 @@ Provider和协议已经通过独立烟测冻结，完整设计、数据流、实
 5. 在 `services/tts.py` 实现火山TTS 2.0适配器和fake provider；直接请求24 kHz PCM，再编码为60 ms Opus，避免MP3和FFmpeg转码链。
 6. 严格实现 `tts start → sentence_start → Opus frames → stop`；start后任何失败、断开或取消都在清理路径尝试stop。
 7. MQTT Profile使用现有加密UDP Opus，WebSocket Profile使用二进制Opus；两者共享相同内部音频和TTS状态合同。
-8. 以 `tts stop` 后设备重新进入listening作为当前播放完成信号；显式 `tts_finished` 仅在固件以后增加时使用。
+8. 当前没有独立`tts_finished`；发送端按60 ms节奏完成全部帧并发出`tts stop`后，循环模式重新执行本地笑声门禁并开放下一条utterance。只有8秒静默、按钮退出或失败才关闭session。
 9. 复用小智Server的连接生命周期、PCM滚动缓冲、60 ms节奏和TTS状态顺序；火山鉴权和二进制帧格式以当前官方文档为准，不复制旧协议。
 10. 网络层仅使用现有 `httpx`、`websockets`、`opuslib-next`；不增加仅macOS可用的依赖，Windows `libopus` 和PyInstaller收集必须进入验收。
 
+### `test0.9` 最快纵向 MVP 检查点
+
+本检查点按最新最快路线先在EVA1跑通MQTT信令与AES-128-CTR UDP Opus的单台纵向闭环；WebSocket保留兼容实现。EVA2由用户关机，因此本结果不会替代后续双设备和双Profile矩阵。
+
+1. 每次新的提问轮次开始时先关闭 ASR 输入并触发 EVA1 内置大笑。
+2. 必须真实观测 `sound.busy=true` 后再观测 `sound.busy=false`；动作 ACK、idle、固定延时或预计音频长度均不能代替播放完成证据。
+3. 大笑期间收到的麦克风帧直接丢弃；完成边沿之后只接受一个新建 utterance，才允许发送火山 ASR。
+4. ASR final 文本交给 DeepSeek；流式增量文本按完整句切分，使用有界队列顺序调用火山 TTS，不等待完整回答才开始首句播放。
+5. 一轮回答只发送一个 `tts start` 和一个最终 `tts stop`；每句先发 `sentence_start` 再发该句 60 ms Opus 帧。任何失败、取消或断开均进入 stop/清理路径。
+6. EVA1 的 MQTT/WebSocket Profile 切换必须认证、可逆且保留原 MQTT 回滚资料；不得改动 EVA2 Profile。
+7. 状态机、Provider 和句子切分先用 fake 时钟/Provider 验证，再运行真实 API 和 EVA1 真机；首个闭环见 `docs/sessions/20260918-voice-mvp-test0.9.md`，循环加固见`docs/sessions/20260919-voice-loop-test0.9.md`。
+8. ASR、LLM、TTS各阶段使用有界生产者/消费者队列：当前45秒对话窗口下ASR 750帧、LLM 4项、TTS句子4/PCM 16/Opus 48；队列满必须失败关闭，不允许无限积压。
+9. DeepSeek输入硬截断512字符，输出硬截断96字符并限制`max_tokens=96`；角色固定为奶龙，回答通常1至3句；火山TTS固定湾区大叔音。
+10. 回答后在同一session重新执行“2秒本地笑声→新utterance→监听”，形成有界循环；每次开放监听后8秒内没有VAD或ASR partial即由Server退出。
+11. Otto按钮在idle时进入循环对话，在connecting/listening/speaking时退出；按钮退出必须产生设备`goodbye`并释放UDP session，再按一次建立全新session。
+12. DeepSeek请求携带由当前设备动作目录收窄得到的`tools/tool_choice`，流式组装至多一个`tool_call`；目标设备锁定当前语音session，参数经Schema再次校验后只通过现有Dispatcher执行。成功动作不追加TTS，失败只播固定失败提示，显式`laugh`完成后复用为下一轮笑声门禁。
+13. 工具轮不写成普通assistant文本历史；真实tool/tool-result结构尚未进入`ChatMessage`前，宁可不保留该轮，也不能用“已执行”文本污染下一轮工具选择。
+
+当前暂停点（2026-09-19）：EVA1已运行固件2.0.11。除既有“笑声→ASR→DeepSeek/TTS→再次笑声→下一轮监听”、按钮退出/重入和8秒静默退出外，真实DeepSeek还完成`self_otto_laugh`以及连续“大笑→后退两步”的工具调用，均由Dispatcher等待`completed`，最终只读验证为idle。工具文本历史缺陷在实测中暴露并修复；两次已完成的前进一步随后用后退两步补偿。最终本地`144 passed`、Ruff和mypy通过；EVA2、完整按键语音工具回合、WebSocket真机Profile、正式CI及实体Windows仍未验收。详细记录见`docs/sessions/20260919-llm-tools-test0.9.md`。
+
+纵向 MVP 的硬门禁是“大笑真实结束后才能开始听”。若没有完整的 `sound.busy true→false` 证据，本轮必须失败关闭，ASR 与 LLM 调用数必须为零。
+
 验收：
 
-- [ ] 编解码单元测试覆盖16/24 kHz、60 ms帧、跨块缓冲、尾帧补齐和非法参数
-- [ ] fake ASR/TTS覆盖partial、final、取消、超时、限流、乱序和所有stop清理路径
-- [ ] 真实火山外部测试返回目标文本；无Key必须记为NOT RUN，不能算PASS
+- [x] 编解码单元测试覆盖16/24 kHz、60 ms帧、跨块缓冲、尾帧补齐和非法参数
+- [x] fake ASR/TTS覆盖partial、final、取消、超时、限流、乱序和所有stop清理路径
+- [x] 真实火山外部测试返回目标文本；无Key必须记为NOT RUN，不能算PASS
 - [ ] EVA1和EVA2分别完成语音转写且不串设备、utterance或帧序号
 - [ ] 指定文本分别能在EVA1和EVA2播放，另一台不播放，目标设备最终回到listening
 - [ ] MQTT加密UDP与WebSocket二进制两种Profile分别完成至少一个闭环
-- [ ] API Key无效、403、429、5xx、超时和设备断开不使Runtime崩溃或遗留会话
-- [ ] 默认日志、SQLite和Browser事件流不保存原始语音、Base64音频、API Key或认证头
+- [x] API Key无效、403、429、5xx、超时和设备断开不使Runtime崩溃或遗留会话
+- [x] 默认日志、SQLite和Browser事件流不保存原始语音、Base64音频、API Key或认证头
+- [x] DeepSeek真实流式tool call、严格参数解析、Dispatcher完成语义和EVA1 `laugh/walk`安全实测通过
 - [ ] macOS与Windows通过Opus编解码、fake Provider集成和PyInstaller导入冒烟
 
 ## Phase 6：Siri式WakeGate
@@ -266,11 +293,11 @@ Provider和协议已经通过独立烟测冻结，完整设计、数据流、实
 
 实现：
 
-1. LLM适配器和结构化意图输出。
-2. 动作Schema与参数范围验证。
-3. Dispatcher单设备、设备组和集群路由。
-4. 每台设备有序动作队列。
-5. 命令结果和错误回传WebUI。
+1. [x] DeepSeek适配器支持文本与单个流式`tool_calls`结构化输出。
+2. [x] 当前语音设备的动作Schema、参数范围、目标锁定和工具结果事件。
+3. [ ] Dispatcher设备组和自然语言集群路由；单设备既有路由已复用。
+4. [x] 每台设备有序动作队列。
+5. [ ] 命令结果和错误回传WebUI；当前已进入Message Bus和持久命令历史。
 
 验收：
 
@@ -339,4 +366,4 @@ Provider和协议已经通过独立烟测冻结，完整设计、数据流、实
 11. 重启MQTT Broker后两台设备恢复连接和状态查询
 ```
 
-Phase 4真机步骤、Topic和JSON以 `docs/MQTT_CONTROL_CONTRACT.md` 为准。当前固件 `2.0.5` 的TCP测试是行为基线，不等于MQTT验收已经通过。
+Phase 4真机步骤、Topic和JSON以 `docs/MQTT_CONTROL_CONTRACT.md` 为准。固件`2.0.5`的TCP测试只保留为历史行为基线；MQTT控制已在两台`2.0.6`真机通过，EVA1随后升级到`2.0.11`并完成语音/工具纵向链，EVA2当前为`2.0.9`且关机。历史结果不能替代下一轮双机并发验收。

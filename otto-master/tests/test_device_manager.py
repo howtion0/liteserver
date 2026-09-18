@@ -76,7 +76,12 @@ async def test_manager_tracks_one_session_liveness_and_persisted_catalog(
         await bus.publish(
             _message(
                 "device.state.received",
-                {"action_state": "moving", "current_action": "swing"},
+                {
+                    "action_state": "moving",
+                    "current_action": "swing",
+                    "sound_busy": True,
+                    "sound_name": "laugh.wav",
+                },
             )
         )
         await bus.publish(
@@ -91,6 +96,8 @@ async def test_manager_tracks_one_session_liveness_and_persisted_catalog(
         assert first is not None
         assert first["status"] == "online"
         assert first["action_state"] == "moving"
+        assert first["sound_busy"] is True
+        assert first["sound_name"] == "laugh.wav"
         assert first["actions_count"] == 2
         assert manager.device_count == 1
 

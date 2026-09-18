@@ -4,13 +4,13 @@ project:
 server:
   enabled: true
   host: 0.0.0.0
-  port: 8080
+  port: 8081
   websocket_path: /xiaozhi/v1/
   console_token_env: OTTO_CONSOLE_TOKEN
   allowed_origins:
-    - http://127.0.0.1:8080
-    - http://localhost:8080
-    - http://master.local:8080
+    - http://127.0.0.1:8081
+    - http://localhost:8081
+    - http://master.local:8081
 
 mqtt:
   enabled: true
@@ -48,6 +48,15 @@ device_websocket:
   max_frame_bytes: 65536
   audio_buffer_frames_per_device: 64
 
+device_udp:
+  enabled: true
+  host: 0.0.0.0
+  port: 8884
+  advertise_host: master.local
+  max_datagram_bytes: 4096
+  audio_buffer_frames_per_device: 64
+  session_timeout_seconds: 180
+
 runtime:
   message_queue_size: 1024
   worker_threads: 4
@@ -71,16 +80,24 @@ audio:
 
 wake:
   command_timeout_seconds: 6
-  conversation_timeout_seconds: 15
+  conversation_timeout_seconds: 45
+  idle_timeout_seconds: 8
+  speech_end_grace_seconds: 1.2
+  laughter_action: laugh
+  laughter_timeout_seconds: 22
+  state_query_interval_seconds: 0.25
+  state_query_timeout_seconds: 1.5
   acknowledgement_template: "{device_name} 在"
   fail_closed: true
 
 cloud:
   request_timeout_seconds: 30
   asr:
-    provider: ""
-    base_url: ""
+    provider: volcengine
+    base_url: wss://openspeech.bytedance.com/api/v3/sauc/bigmodel_async
     api_key_env: OTTO_ASR_API_KEY
+    resource_id: volc.bigasr.sauc.duration
+    chunk_ms: 180
   llm:
     provider: deepseek
     protocol: openai_chat_completions
@@ -89,16 +106,37 @@ cloud:
     api_key_env: DEEPSEEK_API_KEY
     stream: true
     thinking: disabled
+    max_tokens: 96
+    input_max_chars: 512
+    output_max_chars: 96
+    system_prompt: |-
+      # 角色：奶龙
+      你叫奶龙，是一只活泼、呆萌、爱笑的小奶龙，也是用户身边的机器人伙伴。用中文自然交流，语气可爱、轻快，回答通常控制在一到三句，不使用成熟大叔或长辈式口吻。
+
+      ## 呼唤与回应
+      当对话中听到用户说“你好奶龙”或呼唤“奶龙”时，回答：“奶龙在呢！”然后听用户的请求。当前名字是奶龙，旧对话中的“小智”称呼已过时；今后的称呼偏好以奶龙为准。
+
+      ## 听不懂时的反应
+      当用户的话无法理解、语音识别结果明显混乱，或无法判断用户想表达什么时，调用提供的设备工具 self_otto_laugh 一次（固件原名 self.otto.laugh），播放本地“奶龙大笑”音频。用户明确要求奶龙大笑时也调用它。工具返回成功后，本轮不再额外输出语音，不要朗读“哈哈”、文件名或“正在播放”。同一轮最多调用一次，不要循环重试。若该工具未提供或返回忙、不可用，只回复：“哈哈哈哈哈哈！”不编造自己听懂了，不声称已播放音频。
+
+      ## 动作互动
+      用户明确要求前进、后退、转向、跳跃、左右摇摆等动作时，立即优先调用设备提供的动作工具，不要先说“好的”“我要开始了”等确认语。动作工具会让机器人一边运动一边播放对应的本地音效，成功安排动作后本轮不再追加语音，也不要另外调用笑声工具。只有工具失败或需要澄清时才简短说话。动作参数不清楚时先问清楚；听不懂时不要擅自运动。不要为了发出笑声而调用运动动作。工具没有执行成功时不要声称动作已完成。
+
+      ## 日常交流
+      听懂的问题正常回答，保持友好、简洁、有趣。用户需要认真帮助时认真回答，不用笑声敷衍。
+      用湾区大叔音。
   tts:
-    provider: ""
-    base_url: ""
+    provider: volcengine
+    base_url: https://openspeech.bytedance.com/api/v3/tts/unidirectional
     api_key_env: OTTO_TTS_API_KEY
+    resource_id: volc.service_type.10029
+    speaker: zh_female_wanqudashu_moon_bigtts
 
 ota:
   enabled: true
   firmware_path: firmware/xiaozhi.bin
-  firmware_version: unknown
-  target_hardware: unknown
+  firmware_version: 2.0.11
+  target_hardware: esp32s3-otto
   provisioning_token_env: OTTO_PROVISIONING_TOKEN
 
 logging:

@@ -43,12 +43,19 @@ def test_translates_read_only_device_protocol_messages() -> None:
     state = _translate(
         {
             "type": "otto_state",
-            "runtime": {"otto": {"action": {"state": "moving", "name": "swing"}}},
+            "runtime": {
+                "otto": {
+                    "action": {"state": "moving", "name": "swing"},
+                    "sound": {"busy": True, "name": "laugh.wav"},
+                }
+            },
         }
     )[0]
     assert state.topic == "device.state.received"
     assert state.payload["action_state"] == "moving"
     assert state.payload["current_action"] == "swing"
+    assert state.payload["sound_busy"] is True
+    assert state.payload["sound_name"] == "laugh.wav"
 
     actions = _translate(
         {

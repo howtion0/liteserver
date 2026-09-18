@@ -1,18 +1,18 @@
 # Phase 5 火山引擎语音接入设计
 
-本文档冻结 Otto Master Phase 5 的 ASR、TTS、Opus 数据流、云协议、复用边界和验收标准。它记录的是已经完成的可行性验证和后续施工合同，不表示 Phase 5 业务代码已经实现。
+本文档冻结 Otto Master Phase 5 的 ASR、TTS、Opus 数据流、云协议、复用边界和验收标准，并记录 `test0.9` 已完成的单机纵向实现。EVA1 的 MQTT+加密UDP真实闭环已经通过；双设备、双Profile和Windows打包矩阵仍未完成。
 
 ## 1. 当前结论
 
 | 项目 | 决定或证据 |
 |---|---|
 | ASR Provider | 火山引擎豆包语音，当前账号先使用流式语音识别 1.0 时长版资源 `volc.bigasr.sauc.duration` |
-| TTS Provider | 火山引擎豆包语音 2.0，资源 `seed-tts-2.0` |
+| TTS Provider | 火山引擎豆包语音 2.0；当前湾区大叔音使用资源 `volc.service_type.10029`、speaker `zh_female_wanqudashu_moon_bigtts` |
 | ASR传输 | 双向流式 WebSocket：`wss://openspeech.bytedance.com/api/v3/sauc/bigmodel_async` |
 | TTS传输 | 单向流式 HTTP：`https://openspeech.bytedance.com/api/v3/tts/unidirectional` |
 | 鉴权 | 新控制台 API Key，通过 `X-Api-Key` 发送；密钥只从环境变量读取 |
 | 运行时依赖 | 复用现有 `websockets`、`httpx`、`opuslib-next`，不增加FFmpeg、pydub或numpy运行时依赖 |
-| 实现状态 | 云API独立烟测通过；Otto Master适配器、消息链和真机播放尚未实现 |
+| 实现状态 | Cloud/ASR/LLM/TTS/WakeGate、MQTT+AES-CTR UDP Opus和EVA1真机闭环已实现；完整Phase 5矩阵仍进行中 |
 
 当前账号调用 ASR 2.0 资源 `volc.seedasr.sauc.duration` 返回 403；相同 API Key 对 ASR 1.0 和 TTS 均成功。因此 Phase 5 先把它视为“ASR 2.0资源未授权或未开通”，不能误判为密钥整体无效。以后控制台开通 2.0 后，只允许通过配置切换资源ID，不改变内部消息合同。
 
@@ -40,6 +40,27 @@
 - 最终文本精确为“你好，我是伊娃，这是火山引擎语音合成接入测试。”。
 
 这些数字是一次开发机烟测结果，只作为可行性证据和后续回归基线，不是生产SLA。Phase 5必须在同一测试脚本中记录首包、最终结果、总耗时、资源ID和请求ID，才能比较后续变化。
+
+### 2.3 `test0.9` EVA1真实纵向闭环
+
+- 固件：首个闭环使用EVA1 `2.0.9`，随后循环加固升级至`2.0.11`；MQTT控制/信令，AES-128-CTR UDP Opus数据面；动作目录包含无舵机`laugh`，本地音频资产时长约2.0065秒。
+- 门禁：16:30:09进入`laughing`，只有观测到`sound.busy=true → false`后才在16:30:13 arm下一条utterance；笑声前置帧全部丢弃。
+- ASR：设备auto listen没有主动结束包，因此以非空partial连续1.2秒不变作为服务端端点；排空已接收队列后发送火山结束包，最终文本为“卧槽，疯掉了。”。
+- LLM：DeepSeek完全流式；输入上限512字符、输出上限96字符、`max_tokens=96`，增量文本经4句有界队列切分。奶龙角色输出“奶龙在呢！”和“怎么啦，遇到什么疯掉的事啦？”。
+- TTS：湾区大叔音真实合成成功；句子生产、PCM合成、Opus编码、设备播放分为独立有界阶段，最终发送85个60 ms Opus帧。
+- 当时的单轮清理：`tts stop`后固件会在同一session自动`listen/start`；首个闭环用server `goodbye`关闭，最终UDP sessions=0、WakeGate=waiting、EVA1=idle。
+- 自动门禁：首个闭环为`120 passed`；循环加固后为`127 passed`；DeepSeek工具桥后为`144 passed`，Ruff和mypy strict通过。EVA2由用户关机，双机在线隔离、正式CI和实体Windows仍为NOT RUN。
+
+当前DeepSeek请求已携带从目标设备动作目录收窄生成的真实tool schema，并消费流式`tool_calls`；EVA1的`laugh`和`walk`已通过Dispatcher真实完成。模型文本仍不能当作动作证据，只有持久命令`completed`才算成功；双设备语音工具隔离仍未验收。
+
+### 2.4 `test0.9` 循环对话与笑声加固
+
+- 状态机变为`waiting → laughing → listening → recognizing → answering → laughing...`；回答后沿用同一设备session，但每轮使用新的`round_id`和utterance。
+- 每次门禁都先关闭ASR，触发本地`laugh`，观测`sound.busy=true → false`后才发送一次`tts start → stop`建立干净的新监听轮。
+- 监听开放后启动8秒计时。当前轮VAD `speaking=true`或ASR partial会取消计时；纯静默则Server关闭session。按钮在对话态发送设备`goodbye`退出，再按一次建立新session。
+- 原笑声资产为48 kHz名义输入和20 ms包，对60 ms播放链更敏感；2.0.10起改为24 kHz OpusHead、单声道、34个60 ms包。`PlaySound`等待解码队列、PCM队列和I2S写入全部排空后才清除`sound.busy`。
+- 2.0.11让无舵机`laugh`保持动作`moving`直到本地音频真正结束，修复Dispatcher因错过瞬时moving而占住命令15秒、进而取消下一轮笑声的问题；新的不同session也可从失败状态自恢复。
+- EVA1真机完成一次真实回答后的第二轮笑声和监听；连续两个独立门禁均观测完整忙闲边沿，另一次监听在8秒静默后`idle_timeout`退出且UDP sessions=0。
 
 ## 3. 端到端数据流
 
@@ -75,7 +96,10 @@ tts.synthesis.requested
   → MQTT Profile: 加密UDP Opus
      或 WebSocket Profile: 二进制Opus
   → tts stop
-  → 设备重新进入listening，映射为tts.playback.finished
+  → paced发送完成，产生tts.playback.finished
+  → 循环模式重新进入本地laugh门禁并创建下一条utterance
+  → 8秒静默 / 按钮 / 失败时goodbye
+  → 设备回到idle
 ```
 
 24 kHz、单声道、16-bit PCM的一个60 ms帧是1440个采样点、2880字节。编码器必须保留跨HTTP块的尾部数据，凑满一帧再编码；流结束时只补齐最后一帧。
@@ -88,7 +112,9 @@ TTS控制JSON沿用小智固件已经识别的顺序：
 {"type":"tts","state":"stop"}
 ```
 
-`start`成功后，无论云API失败、设备断开还是任务取消，都必须在清理路径尝试发送 `stop`；不能让设备永久停留在speaking。当前固件没有独立的 `tts_finished` 事件，Phase 5暂以 `stop` 后设备重新进入listening作为播放完成证据，未来固件提供显式完成事件后再升级合同。
+`start`成功后，无论云API失败、设备断开还是任务取消，都必须在清理路径尝试发送 `stop`；不能让设备永久停留在speaking。当前固件没有独立的 `tts_finished` 事件，因此`tts.playback.finished`只证明服务端按60 ms节奏发完帧并成功发出`stop`，不冒充扬声器物理播放ACK。正常回答随后进入下一次本地笑声门禁；8秒静默、按钮或失败再以server/device `goodbye`和设备idle作为资源清理证据。未来固件提供显式播放完成事件后再升级合同。
+
+固件还支持识别文字上屏：`{"type":"stt","text":"..."}`显示为用户消息；`tts/sentence_start`中的`text`显示为助手消息。`test0.9`加固轮已实现两者：ASR final先按同一`device_id + session_id + utterance_id`发送一次`stt`，成功后才启动DeepSeek；重复/过期final不显示，上屏失败不继续回答并关闭session。EVA1真实回合已在诊断心跳中确认`last_user_text`和`last_assistant_text`均更新。
 
 ## 4. 控制面与音频数据面
 
@@ -175,7 +201,7 @@ Message Bus只传递控制事实、结果和音频引用，禁止在普通Messag
 }
 ```
 
-TTS Service发布 `tts.synthesis.started`，并按序发布只含 `frame_ref` 和元数据的 `audio.output.frame`；全部PCM转换完成后发布 `tts.synthesis.completed`。Device Gateway负责把帧引用读取为字节并按当前Profile发送。`tts.synthesis.completed`只表示合成与编码结束，不等于设备播放结束；只有设备完成证据才能产生 `tts.playback.finished`。
+TTS Service发布 `tts.synthesis.started`，经内部有界队列把PCM转换为有序Opus帧并交给当前Profile的播放对象，单句结束发布 `tts.synthesis.completed`。`tts.synthesis.completed`只表示该句合成与编码结束；当前`tts.playback.finished`表示服务端已按60 ms节奏发完全部帧并成功发出`stop`，仍不等于扬声器物理播放ACK。
 
 ## 6. 火山协议边界
 
@@ -202,7 +228,7 @@ X-Api-Request-Id: <new uuid per request>
 
 ```text
 X-Api-Key: <environment secret>
-X-Api-Resource-Id: seed-tts-2.0
+X-Api-Resource-Id: volc.service_type.10029
 X-Api-Request-Id: <new uuid per request>
 ```
 
@@ -254,7 +280,8 @@ cloud:
     provider: volcengine
     base_url: https://openspeech.bytedance.com/api/v3/tts/unidirectional
     api_key_env: OTTO_TTS_API_KEY
-    resource_id: seed-tts-2.0
+    resource_id: volc.service_type.10029
+    speaker: zh_female_wanqudashu_moon_bigtts
     sample_rate: 24000
     format: pcm
 ```
@@ -264,6 +291,7 @@ ASR和TTS当前可以在本机 `.env` 中使用同一个火山项目API Key值�
 ## 9. 并发、背压和重试
 
 - 每台设备同一时刻只允许一个活动ASR utterance和一个TTS播放会话；不同设备可并发。
+- 当前45秒对话窗口下有界队列为ASR 750帧、LLM 4项、TTS句子4/PCM 16/Opus 48；各阶段是独立生产者/消费者，队列满或消费者失败必须取消上游并清理。
 - 云请求使用全局并发信号量，具体上限从配置读取；达到上限进入短有界队列，队列满则明确失败。
 - ASR连接建立前可以重试；音频开始上传后默认不重放整段，避免重复结果和内存膨胀。
 - TTS只有在首个音频块发送前可以重试；发送后失败必须stop并报告部分播放失败。

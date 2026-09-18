@@ -364,6 +364,7 @@ async def test_runtime_serves_health_and_releases_network_ports(tmp_path: Path) 
             port=mqtt_port,
             credentials_path=".local-secrets/runtime-mqtt.json",
         ),
+        device_udp=replace(loaded.device_udp, enabled=False),
         discovery=replace(loaded.discovery, enabled=False),
     )
     runtime = Runtime(config)
@@ -473,6 +474,7 @@ async def test_runtime_two_fake_devices_read_only_mqtt_integration(tmp_path: Pat
             gateway_reconnect_seconds=0.1,
             query_timeout_seconds=0.2,
         ),
+        device_udp=replace(loaded.device_udp, enabled=False),
         dispatch=replace(
             loaded.dispatch,
             queue_size_per_device=4,

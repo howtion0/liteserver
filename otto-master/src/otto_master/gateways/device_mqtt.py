@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import re
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any
+from typing import Any, Protocol
 from urllib.parse import quote
 
 from amqtt.client import MQTTClient  # type: ignore[import-untyped]
@@ -36,6 +38,13 @@ class DeviceMqttError(RuntimeError):
 
 
 DeviceMessageError = DeviceProtocolError
+DeviceControlSender = Callable[[str, dict[str, Any]], Awaitable[None]]
+
+
+class MqttVoiceGateway(Protocol):
+    async def handle_mqtt_value(self, device_id: str, value: dict[str, Any]) -> bool: ...
+
+    async def close_all(self, reason: str) -> None: ...
 
 
 class DeviceMqttState(str, Enum):
@@ -70,14 +79,23 @@ def _identity(topic: str, payload: dict[str, Any]) -> str:
 def translate_device_message(topic: str, payload: bytes) -> tuple[Message, ...]:
     """Validate one untrusted uplink packet and return domain messages."""
 
-    value = decode_device_json(payload)
-    device_id = _identity(topic, value)
+    device_id, value = decode_authenticated_device_message(topic, payload)
     return translate_otto_value(
         device_id,
         value,
         transport="mqtt",
         hello_protocol="otto-mqtt/1",
     )
+
+
+def decode_authenticated_device_message(
+    topic: str,
+    payload: bytes,
+) -> tuple[str, dict[str, Any]]:
+    """Decode one MQTT uplink while binding its payload to the authenticated topic."""
+
+    value = decode_device_json(payload)
+    return _identity(topic, value), value
 
 
 @dataclass(frozen=True, slots=True)
@@ -109,11 +127,13 @@ class DeviceMqttGateway:
         broker: EmbeddedMqttBroker,
         message_bus: MessageBus,
         *,
+        voice_gateway: MqttVoiceGateway | None = None,
         logger: logging.Logger | None = None,
     ) -> None:
         self.config = config
         self.broker = broker
         self.message_bus = message_bus
+        self._voice_gateway = voice_gateway
         self._state = DeviceMqttState.CREATED if config.enabled else DeviceMqttState.DISABLED
         self._client: MQTTClient | None = None
         self._receive_task: asyncio.Task[None] | None = None
@@ -128,6 +148,13 @@ class DeviceMqttGateway:
         self._publish_failures = 0
         self._reconnect_attempts = 0
         self._logger = logger or logging.getLogger("otto_master.device_mqtt")
+
+    def set_voice_gateway(self, gateway: MqttVoiceGateway) -> None:
+        """Attach the paired encrypted-UDP data plane before startup."""
+
+        if self.running:
+            raise DeviceMqttError("cannot replace voice gateway while MQTT is running")
+        self._voice_gateway = gateway
 
     @property
     def running(self) -> bool:
@@ -179,6 +206,8 @@ class DeviceMqttGateway:
         if task is not None:
             task.cancel()
             await asyncio.gather(task, return_exceptions=True)
+        if self._voice_gateway is not None:
+            await self._voice_gateway.close_all("mqtt_gateway_stopped")
         await self._disconnect_client()
         await self._publish_transport_unavailable("mqtt_gateway_stopped")
         self._state = DeviceMqttState.STOPPED
@@ -252,7 +281,24 @@ class DeviceMqttGateway:
                     raise DeviceMqttError("MQTT connection ended")
                 self._messages_received += 1
                 try:
-                    messages = translate_device_message(packet.topic, bytes(packet.data))
+                    device_id, value = decode_authenticated_device_message(
+                        packet.topic,
+                        bytes(packet.data),
+                    )
+                    voice_handled = (
+                        self._voice_gateway is not None
+                        and await self._voice_gateway.handle_mqtt_value(device_id, value)
+                    )
+                    messages = (
+                        ()
+                        if voice_handled
+                        else translate_otto_value(
+                            device_id,
+                            value,
+                            transport="mqtt",
+                            hello_protocol="otto-mqtt/1",
+                        )
+                    )
                 except DeviceMessageError as exc:
                     self._messages_rejected += 1
                     self._logger.warning(
@@ -274,6 +320,8 @@ class DeviceMqttGateway:
                     return
                 self._last_error = f"{type(exc).__name__}: {exc}"
                 self._state = DeviceMqttState.RECONNECTING
+                if self._voice_gateway is not None:
+                    await self._voice_gateway.close_all("mqtt_gateway_disconnected")
                 await self._disconnect_client()
                 await self._publish_transport_unavailable("mqtt_gateway_disconnected")
 
@@ -316,19 +364,7 @@ class DeviceMqttGateway:
             await self._publish_command_failure(message, str(exc))
             return
         try:
-            async with self._client_lock:
-                client = self._client
-                if not self.running or client is None:
-                    raise DeviceMqttError("MQTT device gateway is unavailable")
-                await asyncio.wait_for(
-                    client.publish(
-                        command.topic,
-                        command.payload,
-                        qos=0,
-                        retain=False,
-                    ),
-                    timeout=self.config.query_timeout_seconds,
-                )
+            await self._publish_bytes(command.topic, command.payload)
         except Exception as exc:  # noqa: BLE001 - aMQTT publish errors vary by transport
             self._last_error = f"{type(exc).__name__}: {exc}"
             await self._publish_command_failure(message, "mqtt_publish_failed")
@@ -351,6 +387,37 @@ class DeviceMqttGateway:
                 },
             )
         )
+
+    async def publish_device_json(self, device_id: str, payload: dict[str, Any]) -> None:
+        """Publish one bounded internal voice control to an exact device down topic."""
+
+        try:
+            normalized = normalize_device_id(device_id)
+            encoded = json.dumps(
+                payload,
+                ensure_ascii=False,
+                allow_nan=False,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        except (TypeError, ValueError) as exc:
+            raise DeviceMqttError("invalid MQTT voice control") from exc
+        if not encoded or len(encoded) > MAX_DEVICE_MESSAGE_BYTES:
+            raise DeviceMqttError("MQTT voice control exceeds the size limit")
+        await self._publish_bytes(
+            f"otto/v1/devices/{normalized}/down",
+            encoded,
+        )
+        self._messages_published += 1
+
+    async def _publish_bytes(self, topic: str, payload: bytes) -> None:
+        async with self._client_lock:
+            client = self._client
+            if not self.running or client is None:
+                raise DeviceMqttError("MQTT device gateway is unavailable")
+            await asyncio.wait_for(
+                client.publish(topic, payload, qos=0, retain=False),
+                timeout=self.config.query_timeout_seconds,
+            )
 
     async def _publish_command_failure(self, message: Message, reason: str) -> None:
         self._publish_failures += 1

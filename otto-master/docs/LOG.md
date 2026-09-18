@@ -233,3 +233,32 @@
 - 排除：根目录已有 `README.md` 修改，以及 `.env`、虚拟环境、数据库、JSONL日志和固件。
 - 验证：结果回填到Session Contract；远程支线哈希在push后核对。
 - 下一步：在 `test0.1` 远程检查点基础上创建 `test0.2`，进入Phase 2 SQLite。
+
+### 2026-09-18 / test0.9 / 流式语音MVP实现与真机暂停点
+
+- 实现：无numpy/FFmpeg的Opus编解码；火山流式ASR/TTS与DeepSeek SSE；按设备ASR准入、句子切分、有序TTS、WakeGate大笑忙闲边沿门禁；WebSocket在`listen/start`前安全丢弃小智唤醒词预录帧。
+- 验证：Ruff、mypy通过；预录帧修复前全量114项通过，修复后WebSocket真连接定向测试通过；一次真实火山TTS→Opus→ASR和DeepSeek流式烟测成功，后续DeepSeek瞬时失败被安全归一化。
+- 固件：加入认证可逆的MQTT/WebSocket Profile选择、正确WebSocket身份/能力hello及带令牌的`voice_wake`验收入口。EVA1已确认2.0.7和WebSocket首选配置；EVA2保持2.0.6 MQTT。
+- 未通过：Mac播放唤醒词没有触发EVA1；没有观察到真实大笑，也没有完成真机ASR→LLM→TTS闭环。
+- 叫停状态：2.0.8镜像编译成功（SHA-256 `60ef5c7748767266c4470d6144dfa1b79a54b77cf512d0c22f64f8ecb719fd4d`）且OTA已下发EVA1，但回连版本未确认。按用户要求停止跑测；恢复时第一步必须只读查版本，不得重复OTA。
+- Git：尚未提交或push；根目录用户`README.md`继续排除。
+
+### 2026-09-19 / test0.9 / 笑声不卡、循环对话与8秒退出加固
+
+- 根因：本地OGG与云端TTS共用固件解码/播放队列；旧顺序先发`tts start`触发`ResetDecoder`再播本地笑声，会清空或打断笑声。旧笑声还是20 ms Opus包，而当前输出链以60 ms为基线。另一个真机问题是无舵机`laugh`瞬间回idle，Dispatcher看不到`moving → idle`，会占住命令15秒并取消下一轮笑声。
+- 固件：笑声转为约2.0065秒、24 kHz OpusHead、单声道、34个60 ms包；`PlaySound`等待压缩队列、解码、PCM队列和I2S写入全部排空。`laugh`保持moving直到音频结束，按钮改为idle进入循环、对话态发送goodbye退出，并增加VAD上报与WebSocket关闭消息。
+- Server：WakeGate变为`waiting → laughing → listening → recognizing → answering → laughing...`；每轮都必须观测`sound.busy true→false`。当前轮VAD/partial取消8秒静默计时；超时由Server关闭，按钮goodbye正常退出；不同新session可从失败状态恢复。
+- 真机：EVA1经局域网OTA升级至2.0.11。真实回合识别“没事。”并播放回答后再次大笑、进入下一轮；设备goodbye退出和新session重入均出现。2.0.11连续两个独立笑声门禁均出现`moving/laugh/busy=true → idle/false`，第二次约2.1秒完成；另一次监听8秒后以`idle_timeout`退出，UDP sessions=0、EVA1 idle。
+- 工具边界：DeepSeek当前是纯文本SSE，没有请求`tools/tool_choice`，也不消费`tool_calls`；“大笑、前进、后退”等自然语言不会调用Dispatcher。提示词中的`self.otto.*`仍只是合同，下一步必须实现真实工具桥和Schema校验。
+- 验证：ESP-IDF 5.5.5完整构建2.0.11，应用镜像3,788,720字节，SHA256 `4c4298363b621599ea11c8daba2dc3efbc644538666a9f10f7115ece49e200bf`；Otto Master `127 passed`，Ruff、mypy strict（36个源码文件）、Node语法、锁文件和两仓`git diff --check`通过。
+- 运行态：正式Runtime固定在HTTP 8081，与诊断/OTA服务8080并存；EVA1 2.0.11 MQTT online/idle，EVA2关机。未提交、未push、未运行正式CI；按用户要求本轮文档整理后停止。
+
+### 2026-09-19 / test0.9 / DeepSeek真实工具桥与EVA1动作闭环
+
+- 架构：对照原小智的“MCP tools/list → LLM functions → tools/call”流程，在Otto Master复用现有设备动作目录和Dispatcher，不复制第二套设备控制协议。DeepSeek名使用`self_otto_*`，Server固定当前语音设备，模型不能提供MAC、Topic、transport或广播目标。
+- 实现：Cloud Gateway支持`tools/tool_choice`和流式tool delta；LLM Service以有界队列组装至多一个调用并严格校验；新增RobotToolBridge收窄步数/速度/幅度/方向、排除home/校准，等待持久命令终态；WakeGate实现文本/TTS与工具分流、成功不复述、失败固定提示和显式笑声门禁复用。
+- 缺陷与修复：首轮实现把工具结果写成普通assistant“已执行”文本，导致同一LlmService下一轮后退请求不再稳定选择工具。两次安全验收各完成前进一步后，后退均在下发前被唯一工具门禁拦截。修复为工具轮不进入普通文本历史，并新增连续工具回归；随后真实“大笑→后退两步”均completed，补偿前两步并最终只读确认EVA1 idle。
+- 真API/真机：无设备DeepSeek烟测返回`self_otto_laugh {}`；EVA1只读verify后完成`self_otto_laugh → laugh → completed`。修复后连续第二轮返回`self_otto_walk_forward {direction:-1,steps:2}`，Dispatcher等待真实completed。EVA2保持关机且未触碰。
+- 验证：`uv lock --check`、Ruff、mypy strict（37个源码文件）和全量`144 passed`。常驻Runtime已恢复到HTTP 8081/MQTT 1883/UDP 8884并健康，诊断8080保留；未commit、未push、未运行正式CI。
+- 暂停点：代码工具链已完成。下一轮先让用户通过EVA1按钮和真实麦克风口述大笑/前进/后退，确认上屏、无成功复述和循环门禁，再在EVA2开机后补双设备隔离。
+- 固件恢复点：2.0.11源码已通过ESP-IDF 5.5.5复建并推送`howtion0/otto`的`codex/otto-portable@abb769f1d0f3d1c03fb7a6106bd7288f31c66a98`；镜像SHA256保持`4c4298363b621599ea11c8daba2dc3efbc644538666a9f10f7115ece49e200bf`。

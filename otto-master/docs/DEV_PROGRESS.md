@@ -16,6 +16,8 @@
 - Phase 4C最终支线 `test0.6` 已推送，远程哈希为 `f359a1fc3a50360fbcb2de42cced2f48eeb6c164`；探针run `35306214077`和正式run `35306518034`的macOS/Windows jobs均PASS。
 - Phase 4D最终支线 `test0.7` 已推送，远程哈希为 `2b22a724d7169c2f84c5e028b95f40de7c0c4964`；正式run `35309478483`的macOS/Windows jobs均PASS。
 - Phase 4E真机支线为 `test0.8`，从已验收的 `test0.7` 继续；两台EVA控制、锁定改配拒绝、重复ID和Server/Broker重启恢复均已通过，正式CI待提交后运行。
+- Phase 5纵向MVP工作支线为`test0.9`；EVA1的真实语音闭环、循环对话、本地门禁及DeepSeek单设备工具桥已通过，本地门禁完成，本检查点提交后推送该支线并运行正式跨平台CI。
+- 配套EVA固件2.0.11源码已推送到`howtion0/otto`的`codex/otto-portable`，远端SHA为`abb769f1d0f3d1c03fb7a6106bd7288f31c66a98`。
 - 此后每个阶段或补充检查点使用下一个 `testN.N` 编号。
 - 支线编号与产品版本分别记录，互不驱动。
 
@@ -28,14 +30,14 @@
 | Phase 2 SQLite | 已完成 |
 | Phase 3 Web/OTA/mDNS/Embedded MQTT Broker | 已完成 |
 | Phase 4 MQTT控制/TCP回退/WebSocket兼容 | 进行中；Phase 4A-4D软件门禁完成，Phase 4E两台EVA的2.0.6 OTA、MQTT控制、锁定改配、重复ID及Server/Broker重启恢复已通过；仅本支线正式CI待验收 |
-| Phase 5 Opus/ASR/TTS | 未开始；火山Provider、协议和独立云API烟测已完成，Otto Master代码与真机链路未实现 |
-| Phase 6 WakeGate | 未开始 |
-| Phase 7 LLM/Dispatcher/动作 | 部分完成；Phase 4C已实现传输无关命令Dispatcher，LLM意图尚未开始 |
+| Phase 5 Opus/ASR/TTS | 进行中；火山ASR/TTS、Opus、MQTT加密UDP和EVA1真实闭环已实现，EVA2、WebSocket真机与Windows矩阵未完成 |
+| Phase 6 WakeGate | 进行中；每轮2秒笑声门禁、循环问答、8秒静默退出、按钮进出和失败自恢复已在EVA1验收 |
+| Phase 7 LLM/Dispatcher/动作 | 部分完成；DeepSeek流式`tools/tool_calls`、当前语音设备Schema、参数校验和Dispatcher桥已实现并在EVA1验证；分组/广播和双机语音工具隔离未完成 |
 | Phase 8 集群/日志/容错 | 未开始 |
 | Phase 9 Windows打包 | 未开始 |
-| Python业务实现 | Phase 1-3基座及Phase 4A-4D多传输Session、查询、命令仓库和动作/stop闭环已实现 |
-| 自动测试 | 80通过；Ruff与mypy strict通过；Phase 4D macOS/Windows探针与PyInstaller smoke通过 |
-| 硬件验证 | Phase 4E通过；EVA1/EVA2均为2.0.6、MQTT online、14动作可查询，动作/stop、隔离、锁定改配、重复ID及Server/Broker重启恢复通过；实体Windows仍属于Phase 9 |
+| Python业务实现 | Phase 1-4基座及Cloud/ASR/LLM/TTS、RobotToolBridge、DeviceAudioRouter、MQTT UDP和循环WakeGate纵向链已实现 |
+| 自动测试 | 144通过；Ruff、mypy strict和锁文件检查通过；test0.9正式CI尚未运行 |
+| 硬件验证 | EVA1运行2.0.11并通过真实流式问答、循环门禁、按钮/静默退出以及DeepSeek `laugh/walk`工具；连续“大笑→后退两步”真实完成并回到idle。EVA2关机，实体Windows仍属于后续门禁 |
 
 ## 已完成
 
@@ -47,7 +49,7 @@
 - 将“Event Bus”统一为“Message Bus”。
 - 明确macOS开发、Windows部署和单Python进程边界。
 - LLM Provider已选定为DeepSeek官方OpenAI兼容接口；密钥仍只从本地环境变量读取。
-- ASR/TTS Provider已选定为火山引擎豆包语音：ASR 1.0时长版双向WebSocket与TTS 2.0流式HTTP已完成独立真实API烟测；Phase 5实现、设备链路和跨平台验收仍未开始。
+- ASR/TTS Provider已选定为火山引擎豆包语音：ASR 1.0时长版双向WebSocket与TTS 2.0流式HTTP已接入Otto Master，并完成EVA1 MQTT+UDP真机闭环；跨平台与第二台设备验收仍未完成。
 - TTS烟测得到24 kHz单声道PCM并用`opuslib-next`编码为93个60 ms Opus帧，首帧解码通过；ASR对同一音频返回精确最终文本。详细证据和接入合同见`docs/VOLCENGINE_SPEECH_INTEGRATION.md`。
 - 已将MQTT确定为目标集群控制通道：同一Python进程内嵌Broker，TCP作为迁移回退，WebSocket保留兼容。
 - 已记录用户提供的固件 `2.0.5` 真机基线：EVA1/EVA2同网段在线、各14动作、`swing`与`stop`后回到idle；该结果来自当前TCP控制链路，不计为MQTT验收通过。
@@ -92,24 +94,31 @@
 - EVA1使用`amount=0`的swing音效路径完成累计超过60秒的内置笑声播放；以诊断心跳的`sound.busy`而非仅命令ACK确认，最终两台均online/idle、无错误。
 - EVA1在缺少`current_token`的二次发放攻击中返回`provisioning is locked`且保持原身份在线；相同`gate-e3-duplicate-20260918`动作ID实投两次仅产生完全一致的缓存ACK，未二次入队。
 - Otto Master与内嵌Broker完整停止后重新启动，两台EVA无需重启即在约3秒内重新hello；随后EVA1/EVA2 verify分别615.000 ms和91.554 ms通过，WebUI HTTP 200，集群stop后两台均online/idle。
+- `test0.9`已实现无numpy/FFmpeg运行时的Opus编解码、火山流式ASR/TTS、DeepSeek SSE、ASR/LLM/TTS有界生产者/消费者队列、文字上屏和MQTT+AES-128-CTR UDP音频数据面。
+- EVA1首个真实回合完成约2秒本地大笑、火山ASR final、DeepSeek短回答、湾区大叔音分句TTS和85个60 ms Opus帧播放；用户与助手文字均在屏幕运行态更新。
+- 循环加固把回答后流程改为同一session内再次大笑并开放新utterance；VAD/partial取消8秒计时，纯静默由Server退出，按钮由设备`goodbye`退出，再按一次建立新session。
+- 固件2.0.11把本地笑声统一为24 kHz OpusHead、34个60 ms包，并等待解码/PCM/I2S完全排空；`laugh`保持moving直到实际播放结束。EVA1连续两个门禁均观测完整busy边沿，第二次约2.1秒完成，8秒静默后UDP sessions=0。
+- DeepSeek Gateway已发送真实`tools/tool_choice`并组装流式`tool_calls`；LLM Service拒绝混合文本/工具、多调用、未知工具和非严格JSON。RobotToolBridge从当前设备目录生成收窄Schema，把目标锁定到当前语音session，并只通过现有Dispatcher等待真实终态。
+- EVA1先完成无舵机`self_otto_laugh → laugh → completed`；连续工具实测暴露“把工具结果伪装成assistant文本会影响下一轮选择”，修复为工具轮不进入普通文本历史。最终“大笑→后退两步”连续两轮均completed并只读确认idle；此前两次前进一步已由后退两步补偿。
+- 当前全量门禁为`144 passed`；Ruff、mypy strict（37个源码文件）和锁文件检查均通过。固件由ESP-IDF 5.5.5构建，2.0.11应用镜像3,788,720字节，SHA256 `4c4298363b621599ea11c8daba2dc3efbc644538666a9f10f7115ece49e200bf`。
 
 ## 进行中
 
-- `test0.8`真机与本地自动门已完成；固件改动仍在`/Users/howtion/otto`工作树，Otto Master支线只剩正式macOS/Windows CI。
-- 完整Phase 4的软件与两台真机门禁已闭环；实体Windows局域网仍按Phase 9单独验收，不冒充本轮CI结果。
+- `test0.9`的EVA1纵向MVP和本地自动门已完成；固件检查点已上传，Otto Master本检查点正在执行最终提交/push与正式CI。
+- 完整Phase 5仍欠EVA2语音隔离、WebSocket真机Profile、Windows/PyInstaller Opus门禁。EVA2由用户关机，不能把单机结果写成双机通过。
+- 当前单设备工具桥已完成；仍欠从真实按钮/麦克风走完整ASR工具回合的主观验收，以及EVA2开启后的双设备目标隔离。
 
 ## 下一步
 
-按最快MVP关键路径执行：先在EVA1上实现`完整大笑并确认播放结束 → 开启收音 → Opus/PCM → 火山ASR → DeepSeek流式回复 → 分句火山TTS → EVA顺序播放`；随后补WakeGate、MQTT加密UDP音频、第二台设备和Windows打包。笑声期间必须丢弃麦克风帧，未确认播放结束或超时必须失败关闭，不得进入STT/LLM。
+恢复施工后先由用户在EVA1按钮对话中口述“大笑、前进一步、后退一步”，确认ASR文字上屏、工具执行、成功后无额外TTS及下一轮笑声门禁。随后EVA2开机补双设备语音/工具隔离，再补WebSocket真机Profile、正式CI与实体Windows。
 
 ## 已知风险
 
 - Python Opus库在Windows打包时可能需要额外动态库收集，留到Phase 5和Phase 9验证。
-- 火山ASR/TTS协议已独立烟测，但Otto Master适配器、音频背压、EVA真机和Windows `libopus` 打包尚未验证；Provider字段仍须通过Gateway隔离，不能泄漏到领域合同。
+- 火山ASR/TTS适配器、音频背压和EVA1真机已验证；EVA2、WebSocket真机和Windows `libopus` 打包尚未验证。Provider字段仍须通过Gateway隔离，不能泄漏到领域合同。
 - 当前账号的ASR 2.0资源请求返回403，Phase 5先使用已验证的ASR 1.0时长版；2.0开通前不得自动切换或把403误报为密钥整体失效。
-- DeepSeek模型名称来自当前官方配置；实现阶段仍需用新密钥完成一次真实连通测试。
-- ESP32云端唤醒需要固件在休眠时通过VAD触发音频上传，服务端完成后仍需配套固件改造。
-- 固件2.0.6已补齐stop、独立hello/heartbeat和有界命令ID缓存；相同ID真机重复投递仅重放原ACK，当前控制消息保持QoS 0/non-retain。
+- DeepSeek真实tool schema和tool-call消费已实现，但当前只允许当前语音设备的单调用；工具轮暂不保留对话历史，直到`ChatMessage`支持规范的assistant tool_calls与tool result结构。双设备语音隔离和长时间稳定性仍待验收。
+- 固件2.0.11已补齐循环按钮、VAD、笑声播放完成和动作生命周期；当前控制消息仍保持QoS 0/non-retain。
 - Windows真实局域网mDNS、防火墙提示和完整应用打包仍留给Phase 9实体Windows环境；本轮Windows CI已覆盖aMQTT认证/ACL、Runtime网络集成和Broker PyInstaller可执行文件。
 - fake与两台真机的accepted/moving/completed、stop、设备隔离、锁定改配拒绝、重复ID及Server/Broker重启恢复均已通过。
 - TCP和设备WebSocket当前是无TLS的局域网兼容入口，不得直接暴露到互联网或不可信网络；生产化前需要TLS终止、证书校验和对应威胁模型。

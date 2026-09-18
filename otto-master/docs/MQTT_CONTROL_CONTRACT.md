@@ -13,7 +13,7 @@
 
 Phase 5语音链继续遵守这条边界：MQTT只承载TTS/listen等JSON信令，连续Opus仍走加密UDP；内部Message Bus只发布音频元数据和短期 `frame_ref`。三传输共同的身份、选择和命令路由见 `docs/DEVICE_TRANSPORT_CONTRACT.md`；火山ASR/TTS、PCM/Opus转换和完整数据流见 `docs/VOLCENGINE_SPEECH_INTEGRATION.md`。
 
-## 2. 固件2.0.5历史能力与2.0.6现状
+## 2. 固件2.0.5历史能力与2.0.11现状
 
 ### 已有能力
 
@@ -40,6 +40,10 @@ Phase 5语音链继续遵守这条边界：MQTT只承载TTS/listen等JSON信令�
 - 一次性TCP发放把endpoint、client ID、username、password与精确up/down topic写入NVS并锁定；再次发放必须证明当前token。
 
 2026-09-18两台真机均已通过hello/heartbeat、状态与14动作查询、action/stop、双向隔离、相同ID重复投递、Server/Broker重启恢复和攻击性改配拒绝。控制消息继续保持QoS 0/non-retain；QoS 1仅保留为后续网络策略，不作为当前实现事实。
+
+`2.0.9-2.0.11`继续增加语音MVP能力：动作目录包含无舵机`laugh`，设备可上报精确VAD活动，按钮可在idle进入循环对话并在connecting/listening/speaking发送`goodbye`退出。`2.0.11`把`laugh`的`moving → idle`生命周期绑定到本地音频真实播放结束，避免Dispatcher错过瞬时动作状态并在15秒后安全stop。
+
+`test0.9`的LLM工具桥不新增MQTT旁路：DeepSeek只产生内部结构化调用，Server固定当前语音`device_id`、校验动作目录与参数后，仍由Dispatcher编码为精确设备down Topic并等待既有ACK/moving/idle生命周期。模型不能提供Topic、MAC、transport或广播目标。
 
 ## 3. 启动与发现流程
 
@@ -164,6 +168,22 @@ otto/v1/devices/+/up
 
 每个响应必须原样返回 `id`。未知类型、无效参数和不支持动作必须返回显式错误，不能静默执行默认动作。
 
+### 循环语音控制
+
+设备在监听状态的VAD变化通过自己的up Topic发送：
+
+```json
+{"session_id":"session-uuid","type":"listen","state":"vad","speaking":true}
+```
+
+Gateway只把与活动UDP session严格匹配的消息转换为`audio.input.activity`；跨session、缺字段或非布尔`speaking`必须拒绝。Server与设备都使用以下消息关闭当前语音session：
+
+```json
+{"session_id":"session-uuid","type":"goodbye"}
+```
+
+Server收到设备`goodbye`时发布`voice.session.closed(reason=device_goodbye)`；Server主动关闭时先下发`goodbye`，本地原因记为`server_goodbye`。按钮退出和8秒静默退出都必须最终释放UDP session；下一次进入使用新的session ID，不复用旧音频引用。
+
 ## 6. 命令生命周期
 
 ```text
@@ -256,7 +276,7 @@ Config / Logging / MessageBus / Storage
 ```text
 Wi-Fi: EVA1、EVA2和开发机位于同一局域网
 Master: master.local
-Firmware: EVA1/EVA2当前均为2.0.6；2.0.5仅保留为迁移基线
+Firmware: EVA1当前2.0.11；EVA2当前2.0.9且关机；两台2.0.6 MQTT验收只保留为历史共同基线
 EVA1当前IP: 192.168.172.127（仅诊断）
 EVA2当前IP: 192.168.172.117（仅诊断）
 动作目录: 14个动作

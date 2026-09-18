@@ -11,6 +11,7 @@ requires-python = ">=3.11"
 dependencies = [
     "amqtt>=0.12,<0.13",
     "aiosqlite",
+    "cryptography>=43,<47",
     "fastapi",
     "httpx",
     "opuslib-next",

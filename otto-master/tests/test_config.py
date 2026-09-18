@@ -20,6 +20,16 @@ def test_repository_config_loads_without_exposing_secret_values() -> None:
     assert config.cloud.llm.provider == "deepseek"
     assert config.cloud.llm.api_key_env == "DEEPSEEK_API_KEY"
     assert config.cloud.llm.base_url == "https://api.deepseek.com"
+    assert config.cloud.llm.max_tokens == 96
+    assert config.cloud.llm.input_max_chars == 512
+    assert config.cloud.llm.output_max_chars == 96
+    assert config.wake.speech_end_grace_seconds == 1.2
+    assert config.wake.idle_timeout_seconds == 8
+    assert config.wake.laughter_action == "laugh"
+    assert config.cloud.llm.system_prompt is not None
+    assert "你叫奶龙" in config.cloud.llm.system_prompt
+    assert config.cloud.tts.speaker == "zh_female_wanqudashu_moon_bigtts"
+    assert config.cloud.tts.resource_id == "volc.service_type.10029"
     assert config.mqtt.enabled is True
     assert config.mqtt.port == 1883
     assert config.mqtt.heartbeat_stale_seconds == 15

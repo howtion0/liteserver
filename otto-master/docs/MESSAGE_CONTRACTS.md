@@ -66,10 +66,16 @@ device.verification.requested
 device.verification.completed
 audio.input.started
 audio.input.frame
+audio.input.activity
 audio.input.finished
 audio.output.frame
+voice.endpoint.detected
+voice.session.state.changed
+voice.session.closed
+voice.transcription.started
 voice.transcription.partial
 voice.transcription.completed
+voice.transcription.displayed
 voice.transcription.failed
 voice.wake.accepted
 voice.wake.rejected
@@ -79,7 +85,9 @@ tts.synthesis.started
 tts.synthesis.completed
 tts.synthesis.failed
 tts.playback.requested
+tts.playback.started
 tts.playback.finished
+tts.playback.failed
 robot.action.requested
 robot.action.accepted
 robot.action.completed
@@ -147,7 +155,7 @@ MQTT外部Topic和JSON合同见 `docs/MQTT_CONTROL_CONTRACT.md`，三传输共�
 - 默认不将原始音频写入消息日志或SQLite。
 - 音频缓冲必须有设备归属、大小上限和生命周期。
 - 音频引用必须同时核对 `device_id`、`utterance_id` 和帧序号；过期、跨设备、重复、缺失或倒序引用失败关闭。
-- `tts.synthesis.completed`只表示云合成和Opus编码完成；只有设备完成证据才能产生`tts.playback.finished`。
+- `tts.synthesis.completed`只表示单句云合成和Opus编码完成。当前`tts.playback.finished`表示服务端已按60 ms节奏发送全部帧并成功发出`tts stop`，不是扬声器物理播放ACK；未来有设备完成事件后再提升其语义。
 
 `audio.input.frame` 的最小payload：
 
@@ -167,6 +175,44 @@ MQTT外部Topic和JSON合同见 `docs/MQTT_CONTROL_CONTRACT.md`，三传输共�
 转写结果必须包含 `device_id`、`utterance_id`、规范化 `text` 和 `is_final`。Provider名称、请求ID和延迟可作为观测字段；Provider原始响应、认证头和音频不得进入普通消息。
 
 TTS使用两层状态：`tts.synthesis.*`描述云合成，`tts.playback.*`描述设备播放。`audio.output.frame`只携带目标设备、会话、序号、音频参数和 `frame_ref`。完整Phase 5合同见 `docs/VOLCENGINE_SPEECH_INTEGRATION.md`。
+
+`test0.9`新增并冻结以下运行时语义：
+
+- `voice.endpoint.detected`表示auto模式下非空partial稳定达到配置窗口，ASR将停止接收新帧、排空已入队音频并请求Provider final；它不等同设备发送了`listen/stop`。
+- ASR、LLM和TTS之间使用有界生产者/消费者队列；取消、队列满和下游失败必须向上游传播，不能遗留后台生产任务。
+- `audio.input.activity`至少携带`device_id + transport + session_id + utterance_id + speaking`；只有精确匹配当前轮且`speaking=true`才能取消8秒静默计时，旧轮、跨设备和`false`事件不能延长窗口。
+- 正常回答完成后不关闭设备session，而是重新进入`laughing`；本地笑声完成后用一次`tts start → stop`让固件建立新的`listen/start`和utterance，再进入下一轮识别。
+- 8秒内没有真实VAD/partial时，Server发送`goodbye`并发布`voice.session.closed(reason=server_goodbye)`；按钮退出由设备发送`goodbye`并发布`voice.session.closed(reason=device_goodbye)`。两者都必须回到`waiting`并释放音频引用。
+- 异常关闭仍失败关闭；失败状态只允许由新的不同session重新开始，迟到的旧session消息不能复活对话。
+
+### 7.1 设备文字上屏映射
+
+固件外部协议已有两种文字显示入口：
+
+```json
+{"type":"stt","text":"用户识别文字"}
+{"type":"tts","state":"sentence_start","text":"助手回答文字"}
+```
+
+第一条显示为`user`消息，第二条显示为`assistant`消息。Otto Master在加固轮中已实现两者：匹配当前`device_id + session_id + utterance_id`的ASR final先转换成`stt`，成功后发布`voice.transcription.displayed`并启动LLM；回答句继续由`sentence_start`显示。重复、过期或其他设备的final被忽略，上屏失败则不调用LLM并安全关闭会话。
+
+### 7.2 LLM工具调用与结果
+
+DeepSeek工具名使用API兼容的`self_otto_*`，Server再映射到设备动作目录。模型只收到当前语音设备的白名单Schema，不能提供或覆盖`device_id`、transport、Topic、confirmation或command ID。每轮只允许纯文本或一个工具调用，二者混合、多个调用、未知工具、非法JSON或越界参数全部失败关闭。
+
+工具生命周期发布以下内部事件：
+
+```text
+voice.tool.requested
+voice.tool.completed
+voice.tool.failed
+```
+
+三者至少携带`device_id + session_id + utterance_id + tool_call_id + tool_name`。`completed`额外携带持久`command_id + command_type + status=completed`以及可选`action`；`failed`只携带稳定、截断后的`error_code`。原始Provider响应、认证信息和任意模型错误文本不得进入事件。参数的权威审计记录位于Dispatcher持久命令payload，不在事件中复制第二份。
+
+`voice.tool.requested`不代表设备已接收或动作完成；只有Dispatcher持久状态到达`completed`才允许发布`voice.tool.completed`。成功工具轮不生成TTS文字，失败轮只使用固定用户提示。显式`laugh`若已真实完成，可直接充当下一轮笑声门禁，不得再提交第二次笑声。
+
+普通`ChatMessage`当前只表示可朗读文本，不支持OpenAI结构化tool/tool-result历史。因此工具轮不写成虚构的assistant“已执行”文本；工具审计由上述事件和Command Repository负责。
 
 ## 8. 兼容性
 

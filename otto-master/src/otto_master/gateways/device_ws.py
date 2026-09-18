@@ -27,6 +27,7 @@ from .device_protocol import (
     required_string,
     translate_otto_value,
     validate_payload_identity,
+    voice_session_closed_message,
 )
 from .mqtt_broker import normalize_device_id
 
@@ -56,7 +57,9 @@ class _WsPeer:
     input_frame_duration_ms: int
     utterance_id: str | None = None
     next_audio_sequence: int = 0
+    close_reason: str = "websocket_disconnected"
     send_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    playback_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
 
 
 @dataclass(frozen=True, slots=True)
@@ -66,6 +69,86 @@ class _AudioFrame:
     utterance_id: str
     sequence: int
     payload: bytes
+
+
+class DevicePlaybackError(RuntimeError):
+    """Raised when ordered audio output to a device cannot continue."""
+
+
+class DeviceTtsPlayback:
+    """One exclusive TTS control/audio sequence for a connected WebSocket peer."""
+
+    def __init__(self, gateway: DeviceWebsocketGateway, peer: _WsPeer) -> None:
+        self._gateway = gateway
+        self._peer = peer
+        self._closed = False
+
+    @property
+    def device_id(self) -> str:
+        return self._peer.device_id
+
+    @property
+    def session_id(self) -> str:
+        return self._peer.session_id
+
+    async def send_sentence(self, text: str) -> None:
+        normalized = text.strip()
+        if not normalized or len(normalized) > 2_000:
+            raise ValueError("TTS sentence must contain 1..2000 characters")
+        await self._send_json(
+            {
+                "session_id": self._peer.session_id,
+                "type": "tts",
+                "state": "sentence_start",
+                "text": normalized,
+            }
+        )
+
+    async def send_audio(self, packet: bytes) -> None:
+        if not isinstance(packet, bytes):
+            raise TypeError("TTS packet must be bytes")
+        if not packet or len(packet) > self._gateway.config.max_frame_bytes:
+            raise ValueError("TTS Opus packet size is invalid")
+        self._ensure_open()
+        if not await self._gateway._is_current(self._peer):
+            raise DevicePlaybackError("websocket_device_not_connected")
+        try:
+            async with self._peer.send_lock:
+                await self._peer.websocket.send_bytes(packet)
+        except Exception as exc:
+            raise DevicePlaybackError("websocket_audio_write_failed") from exc
+        self._gateway._audio_frames_sent += 1
+
+    async def stop(self) -> None:
+        if self._closed:
+            return
+        try:
+            if await self._gateway._is_current(self._peer):
+                await self._send_json(
+                    {
+                        "session_id": self._peer.session_id,
+                        "type": "tts",
+                        "state": "stop",
+                    }
+                )
+        finally:
+            self._closed = True
+            if self._peer.playback_lock.locked():
+                self._peer.playback_lock.release()
+
+    async def _send_json(self, payload: dict[str, JsonValue]) -> None:
+        self._ensure_open()
+        if not await self._gateway._is_current(self._peer):
+            raise DevicePlaybackError("websocket_device_not_connected")
+        try:
+            async with self._peer.send_lock:
+                await self._peer.websocket.send_json(payload)
+        except Exception as exc:
+            raise DevicePlaybackError("websocket_control_write_failed") from exc
+
+    def _ensure_open(self) -> None:
+        if self._closed:
+            raise DevicePlaybackError("tts_playback_is_closed")
 
 
 def _now() -> str:
@@ -107,6 +190,9 @@ class DeviceWebsocketGateway:
         self._messages_published = 0
         self._publish_failures = 0
         self._audio_frames_received = 0
+        self._audio_frames_sent = 0
+        self._transcriptions_sent = 0
+        self._prelisten_audio_frames_dropped = 0
         self._logger = logger or logging.getLogger("otto_master.device_ws")
 
     @property
@@ -158,6 +244,9 @@ class DeviceWebsocketGateway:
             "messages_published": self._messages_published,
             "publish_failures": self._publish_failures,
             "audio_frames_received": self._audio_frames_received,
+            "audio_frames_sent": self._audio_frames_sent,
+            "transcriptions_sent": self._transcriptions_sent,
+            "prelisten_audio_frames_dropped": self._prelisten_audio_frames_dropped,
             "audio_frames_buffered": len(self._audio_frames),
             "last_error": self._last_error,
             "checked_at": _now(),
@@ -261,6 +350,14 @@ class DeviceWebsocketGateway:
                 current = await self._unregister(peer)
                 await self._clear_audio(peer.device_id, peer.session_id)
                 if current and self.message_bus.running and self.running:
+                    await self.message_bus.publish(
+                        voice_session_closed_message(
+                            peer.device_id,
+                            "websocket",
+                            peer.session_id,
+                            peer.close_reason,
+                        )
+                    )
                     await self.message_bus.publish(
                         disconnected_message(
                             peer.device_id,
@@ -421,7 +518,12 @@ class DeviceWebsocketGateway:
                 transport="websocket",
             ):
                 await self.message_bus.publish(message)
-        elif message_type in {"mcp", "goodbye"}:
+        elif message_type == "goodbye":
+            peer.close_reason = "device_goodbye"
+            if peer.utterance_id is not None:
+                await self._finish_utterance(peer, reason="goodbye")
+            await self._safe_close(peer.websocket, 1000, "device goodbye")
+        elif message_type == "mcp":
             return
         else:
             raise DeviceProtocolError(f"unsupported WebSocket message type: {message_type}")
@@ -434,7 +536,12 @@ class DeviceWebsocketGateway:
             if mode not in {"auto", "manual", "realtime"}:
                 raise DeviceProtocolError("listen mode is invalid")
             if peer.utterance_id is not None:
-                raise DeviceProtocolError("listen start received while an utterance is active")
+                # Xiaozhi firmware re-enters listening after a TTS stop without
+                # first emitting a listen/stop for the pre-TTS utterance. Close
+                # that bounded input before opening the post-TTS question so
+                # wake-gate playback cannot turn a valid restart into a
+                # protocol disconnect.
+                await self._finish_utterance(peer, reason="listen_restarted")
             peer.utterance_id = str(uuid4())
             peer.next_audio_sequence = 0
             await self.message_bus.publish(
@@ -470,6 +577,23 @@ class DeviceWebsocketGateway:
                         "transport": "websocket",
                         "session_id": peer.session_id,
                         "text": text,
+                    },
+                )
+            )
+            return
+        if state == "vad":
+            speaking = value.get("speaking")
+            if not isinstance(speaking, bool):
+                raise DeviceProtocolError("listen VAD speaking must be a boolean")
+            if peer.utterance_id is None:
+                return
+            await self.message_bus.publish(
+                self._audio_lifecycle_message(
+                    peer,
+                    "audio.input.activity",
+                    {
+                        "utterance_id": peer.utterance_id,
+                        "speaking": speaking,
                     },
                 )
             )
@@ -519,7 +643,11 @@ class DeviceWebsocketGateway:
             raise DeviceProtocolError("WebSocket audio frame size is invalid")
         utterance_id = peer.utterance_id
         if utterance_id is None:
-            raise DeviceProtocolError("WebSocket audio requires an active listen utterance")
+            # Xiaozhi sends bounded wake-word pre-roll after hello but before
+            # listen/start. It predates the post-laughter user utterance, so
+            # fail closed by dropping it without disconnecting the device.
+            self._prelisten_audio_frames_dropped += 1
+            return
         frame_ref = str(uuid4())
         sequence = peer.next_audio_sequence
         async with self._audio_lock:
@@ -589,6 +717,72 @@ class DeviceWebsocketGateway:
                 if not ids:
                     self._audio_ids.pop(device_id, None)
             return frame.payload
+
+    async def start_tts_playback(self, device_id: str) -> DeviceTtsPlayback:
+        """Send TTS start and reserve one playback slot for this device."""
+
+        async with self._connection_lock:
+            peer = self._connections.get(device_id)
+        if peer is None or not await self._is_current(peer):
+            raise DevicePlaybackError("websocket_device_not_connected")
+        await peer.playback_lock.acquire()
+        playback = DeviceTtsPlayback(self, peer)
+        try:
+            await playback._send_json(
+                {
+                    "session_id": peer.session_id,
+                    "type": "tts",
+                    "state": "start",
+                }
+            )
+        except BaseException:
+            try:
+                await playback.stop()
+            except DevicePlaybackError:
+                pass
+            raise
+        return playback
+
+    async def send_transcription(
+        self,
+        device_id: str,
+        session_id: str,
+        text: str,
+    ) -> None:
+        """Send final ASR text to exactly one authenticated WebSocket session."""
+
+        normalized = _transcription_text(text)
+        async with self._connection_lock:
+            peer = self._connections.get(device_id)
+        if peer is None or not await self._is_current(peer):
+            raise DevicePlaybackError("websocket_device_not_connected")
+        if peer.session_id != session_id:
+            raise DevicePlaybackError("device_session_changed")
+        try:
+            async with peer.send_lock:
+                await peer.websocket.send_json(
+                    {
+                        "session_id": peer.session_id,
+                        "type": "stt",
+                        "text": normalized,
+                    }
+                )
+        except Exception as exc:
+            raise DevicePlaybackError("websocket_control_write_failed") from exc
+        self._transcriptions_sent += 1
+
+    async def close_audio_session(self, device_id: str, session_id: str) -> bool:
+        """Close a completed WebSocket voice turn so firmware returns to idle."""
+
+        async with self._connection_lock:
+            peer = self._connections.get(device_id)
+        if peer is None:
+            return False
+        if peer.session_id != session_id:
+            raise DevicePlaybackError("device_session_changed")
+        peer.close_reason = "server_goodbye"
+        await self._safe_close(peer.websocket, 1000, "voice turn complete")
+        return True
 
     async def _clear_audio(self, device_id: str, session_id: str) -> None:
         async with self._audio_lock:
@@ -703,3 +897,12 @@ class DeviceWebsocketGateway:
             await websocket.close(code=code, reason=reason)
         except (RuntimeError, WebSocketDisconnect):
             pass
+
+
+def _transcription_text(text: str) -> str:
+    if not isinstance(text, str):
+        raise TypeError("transcription text must be a string")
+    normalized = text.strip()
+    if not normalized or len(normalized) > 512:
+        raise ValueError("transcription text must contain 1..512 characters")
+    return normalized

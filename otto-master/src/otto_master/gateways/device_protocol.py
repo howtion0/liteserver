@@ -222,6 +222,25 @@ def disconnected_message(device_id: str, transport: str, reason: str) -> Message
     )
 
 
+def voice_session_closed_message(
+    device_id: str,
+    transport: str,
+    session_id: str,
+    reason: str,
+) -> Message:
+    """Describe one voice-channel closure without marking fleet control offline."""
+
+    payload = _base_payload(device_id, transport, None)
+    payload.update({"session_id": session_id, "reason": reason[:128]})
+    return _message(
+        device_id=device_id,
+        transport=transport,
+        topic="voice.session.closed",
+        kind=MessageKind.EVENT,
+        payload=payload,
+    )
+
+
 def _runtime_action(value: dict[str, Any]) -> tuple[Any, Any]:
     state = value.get("action_state")
     action_name = value.get("current_action")
@@ -236,8 +255,23 @@ def _runtime_action(value: dict[str, Any]) -> tuple[Any, Any]:
     return state, action_name
 
 
+def _runtime_sound(value: dict[str, Any]) -> tuple[Any, Any]:
+    busy = value.get("sound_busy")
+    sound_name = value.get("sound_name")
+    runtime = value.get("runtime")
+    if isinstance(runtime, dict):
+        otto = runtime.get("otto")
+        if isinstance(otto, dict):
+            sound = otto.get("sound")
+            if isinstance(sound, dict):
+                busy = sound.get("busy", busy)
+                sound_name = sound.get("name", sound_name)
+    return busy, sound_name
+
+
 def _state(device_id: str, transport: str, value: dict[str, Any]) -> Message:
     action_state, current_action = _runtime_action(value)
+    sound_busy, sound_name = _runtime_sound(value)
     if action_state not in {"unknown", "idle", "moving"}:
         raise DeviceProtocolError("state must contain a known action state")
     if current_action is not None and (
@@ -251,6 +285,18 @@ def _state(device_id: str, transport: str, value: dict[str, Any]) -> Message:
     payload = _base_payload(device_id, transport, external_id)
     payload["action_state"] = cast(str, action_state)
     payload["current_action"] = normalized_action
+    if sound_busy is not None:
+        if not isinstance(sound_busy, bool):
+            raise DeviceProtocolError("sound busy must be a boolean when provided")
+        payload["sound_busy"] = sound_busy
+    if sound_name is not None:
+        if (
+            not isinstance(sound_name, str)
+            or not sound_name.strip()
+            or len(sound_name.strip()) > 80
+        ):
+            raise DeviceProtocolError("sound name must be a bounded non-empty string or null")
+        payload["sound_name"] = sound_name.strip()
     return _message(
         device_id=device_id,
         transport=transport,

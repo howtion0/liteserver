@@ -77,6 +77,17 @@ class DeviceWebsocketConfig:
 
 
 @dataclass(frozen=True, slots=True)
+class DeviceUdpConfig:
+    enabled: bool
+    host: str
+    port: int
+    advertise_host: str
+    max_datagram_bytes: int
+    audio_buffer_frames_per_device: int
+    session_timeout_seconds: float
+
+
+@dataclass(frozen=True, slots=True)
 class RuntimeConfig:
     message_queue_size: int
     worker_threads: int
@@ -109,6 +120,12 @@ class AudioConfig:
 class WakeConfig:
     command_timeout_seconds: float
     conversation_timeout_seconds: float
+    idle_timeout_seconds: float
+    speech_end_grace_seconds: float
+    laughter_action: str
+    laughter_timeout_seconds: float
+    state_query_interval_seconds: float
+    state_query_timeout_seconds: float
     acknowledgement_template: str
     fail_closed: bool
 
@@ -121,6 +138,13 @@ class CloudProviderConfig:
     model: str | None = None
     stream: bool = False
     thinking: str | None = None
+    resource_id: str | None = None
+    speaker: str | None = None
+    chunk_ms: int | None = None
+    max_tokens: int | None = None
+    input_max_chars: int | None = None
+    output_max_chars: int | None = None
+    system_prompt: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -153,6 +177,9 @@ class RuntimeSecrets:
     console_token: str | None = field(default=None, repr=False)
     mqtt_master_password: str | None = field(default=None, repr=False)
     provisioning_token: str | None = field(default=None, repr=False)
+    asr_api_key: str | None = field(default=None, repr=False)
+    llm_api_key: str | None = field(default=None, repr=False)
+    tts_api_key: str | None = field(default=None, repr=False)
 
 
 @dataclass(frozen=True, slots=True)
@@ -165,6 +192,7 @@ class AppConfig:
     dispatch: DispatchConfig
     tcp: TcpConfig
     device_websocket: DeviceWebsocketConfig
+    device_udp: DeviceUdpConfig
     runtime: RuntimeConfig
     discovery: DiscoveryConfig
     database: DatabaseConfig
@@ -230,6 +258,25 @@ def _int(
     if maximum is not None and value > maximum:
         raise ConfigError(f"{path}.{name} must be at most {maximum}")
     return value
+
+
+def _optional_bounded_int(
+    section: Mapping[str, Any],
+    name: str,
+    path: str,
+    *,
+    minimum: int,
+    maximum: int,
+) -> int | None:
+    if name not in section:
+        return None
+    return _int(
+        section,
+        name,
+        path,
+        minimum=minimum,
+        maximum=maximum,
+    )
 
 
 def _port(section: Mapping[str, Any], name: str, path: str) -> int:
@@ -313,9 +360,48 @@ def _provider(section: Mapping[str, Any], path: str) -> CloudProviderConfig:
     thinking_value = section.get("thinking")
     if thinking_value is not None and not isinstance(thinking_value, str):
         raise ConfigError(f"{path}.thinking must be a string when provided")
+    system_prompt = section.get("system_prompt")
+    if system_prompt is not None and (
+        not isinstance(system_prompt, str) or not system_prompt.strip()
+    ):
+        raise ConfigError(f"{path}.system_prompt must be a non-empty string when provided")
     stream = section.get("stream", False)
     if not isinstance(stream, bool):
         raise ConfigError(f"{path}.stream must be a boolean")
+    resource_id = section.get("resource_id")
+    if resource_id is not None and (
+        not isinstance(resource_id, str) or not resource_id.strip()
+    ):
+        raise ConfigError(f"{path}.resource_id must be a non-empty string when provided")
+    speaker = section.get("speaker")
+    if speaker is not None and (not isinstance(speaker, str) or not speaker.strip()):
+        raise ConfigError(f"{path}.speaker must be a non-empty string when provided")
+    chunk_ms = section.get("chunk_ms")
+    if chunk_ms is not None and (
+        isinstance(chunk_ms, bool) or not isinstance(chunk_ms, int) or chunk_ms < 20
+    ):
+        raise ConfigError(f"{path}.chunk_ms must be an integer of at least 20")
+    max_tokens = _optional_bounded_int(
+        section,
+        "max_tokens",
+        path,
+        minimum=1,
+        maximum=8_192,
+    )
+    input_max_chars = _optional_bounded_int(
+        section,
+        "input_max_chars",
+        path,
+        minimum=32,
+        maximum=32_768,
+    )
+    output_max_chars = _optional_bounded_int(
+        section,
+        "output_max_chars",
+        path,
+        minimum=16,
+        maximum=8_192,
+    )
     return CloudProviderConfig(
         provider=_string(section, "provider", path, allow_empty=True),
         base_url=_string(section, "base_url", path, allow_empty=True),
@@ -323,6 +409,13 @@ def _provider(section: Mapping[str, Any], path: str) -> CloudProviderConfig:
         model=model_value,
         stream=stream,
         thinking=thinking_value,
+        resource_id=resource_id,
+        speaker=speaker,
+        chunk_ms=chunk_ms,
+        max_tokens=max_tokens,
+        input_max_chars=input_max_chars,
+        output_max_chars=output_max_chars,
+        system_prompt=system_prompt.strip() if system_prompt is not None else None,
     )
 
 
@@ -351,6 +444,7 @@ def load_config(
     dispatch = _section(root, "dispatch")
     tcp = _section(root, "tcp")
     device_websocket = _section(root, "device_websocket")
+    device_udp = _section(root, "device_udp")
     runtime = _section(root, "runtime")
     discovery = _section(root, "discovery")
     database = _section(root, "database")
@@ -378,6 +472,9 @@ def load_config(
     cloud_asr = _section(cloud, "asr")
     cloud_llm = _section(cloud, "llm")
     cloud_tts = _section(cloud, "tts")
+    asr_api_key_env = _string(cloud_asr, "api_key_env", "cloud.asr")
+    llm_api_key_env = _string(cloud_llm, "api_key_env", "cloud.llm")
+    tts_api_key_env = _string(cloud_tts, "api_key_env", "cloud.tts")
 
     return AppConfig(
         project=ProjectConfig(name=_string(project, "name", "project")),
@@ -466,6 +563,35 @@ def load_config(
                 minimum=1,
             ),
         ),
+        device_udp=DeviceUdpConfig(
+            enabled=_bool(device_udp, "enabled", "device_udp"),
+            host=_string(device_udp, "host", "device_udp"),
+            port=_port(device_udp, "port", "device_udp"),
+            advertise_host=_string(
+                device_udp,
+                "advertise_host",
+                "device_udp",
+            ),
+            max_datagram_bytes=_int(
+                device_udp,
+                "max_datagram_bytes",
+                "device_udp",
+                minimum=256,
+                maximum=65_507,
+            ),
+            audio_buffer_frames_per_device=_int(
+                device_udp,
+                "audio_buffer_frames_per_device",
+                "device_udp",
+                minimum=1,
+            ),
+            session_timeout_seconds=_float(
+                device_udp,
+                "session_timeout_seconds",
+                "device_udp",
+                minimum=10,
+            ),
+        ),
         runtime=RuntimeConfig(
             message_queue_size=_int(runtime, "message_queue_size", "runtime", minimum=1),
             worker_threads=_int(runtime, "worker_threads", "runtime", minimum=1),
@@ -493,6 +619,22 @@ def load_config(
             command_timeout_seconds=_float(wake, "command_timeout_seconds", "wake", minimum=0.1),
             conversation_timeout_seconds=_float(
                 wake, "conversation_timeout_seconds", "wake", minimum=0.1
+            ),
+            idle_timeout_seconds=_float(
+                wake, "idle_timeout_seconds", "wake", minimum=0.1
+            ),
+            speech_end_grace_seconds=_float(
+                wake, "speech_end_grace_seconds", "wake", minimum=0.1
+            ),
+            laughter_action=_string(wake, "laughter_action", "wake"),
+            laughter_timeout_seconds=_float(
+                wake, "laughter_timeout_seconds", "wake", minimum=1.0
+            ),
+            state_query_interval_seconds=_float(
+                wake, "state_query_interval_seconds", "wake", minimum=0.05
+            ),
+            state_query_timeout_seconds=_float(
+                wake, "state_query_timeout_seconds", "wake", minimum=0.1
             ),
             acknowledgement_template=_string(wake, "acknowledgement_template", "wake"),
             fail_closed=_bool(wake, "fail_closed", "wake"),
@@ -522,5 +664,8 @@ def load_config(
             console_token=_optional_secret(selected_environment, console_token_env),
             mqtt_master_password=_optional_secret(selected_environment, master_password_env),
             provisioning_token=_optional_secret(selected_environment, provisioning_token_env),
+            asr_api_key=_optional_secret(selected_environment, asr_api_key_env),
+            llm_api_key=_optional_secret(selected_environment, llm_api_key_env),
+            tts_api_key=_optional_secret(selected_environment, tts_api_key_env),
         ),
     )
