@@ -18,6 +18,38 @@ from otto_master.messages import Message, MessageKind
 from otto_master.storage.database import Database
 
 
+class FakeDeviceReader:
+    def __init__(self) -> None:
+        self.devices = [
+            {
+                "device_id": "aabbccddee01",
+                "name": "EVA1",
+                "status": "online",
+                "transport": "mqtt",
+            },
+            {
+                "device_id": "aabbccddee02",
+                "name": "EVA2",
+                "status": "stale",
+                "transport": "mqtt",
+            },
+        ]
+
+    async def list_devices(self) -> list[dict[str, Any]]:
+        return list(self.devices)
+
+    async def get_device(self, device_id: str) -> dict[str, Any] | None:
+        return next(
+            (item for item in self.devices if item["device_id"] == device_id),
+            None,
+        )
+
+    async def get_actions(self, device_id: str) -> list[dict[str, Any]] | None:
+        if await self.get_device(device_id) is None:
+            return None
+        return [{"name": "swing"}] if device_id.endswith("01") else [{"name": "walk"}]
+
+
 def _free_port() -> int:
     with socket.socket() as listener:
         listener.bind(("127.0.0.1", 0))
@@ -92,6 +124,7 @@ async def _context(config: Any) -> WebContext:
         message_bus=bus,
         mqtt_broker=broker,
         events=events,
+        devices=None,
         component_status=components,
         started_at=datetime.now(UTC),
         started_monotonic=monotonic(),
@@ -217,6 +250,32 @@ async def test_mutations_require_auth_and_reject_arbitrary_fields(tmp_path: Path
             )
             assert valid_but_not_ready.status_code == 503
             assert valid_but_not_ready.json()["error"]["code"] == "component_not_ready"
+    finally:
+        await _close_context(context)
+
+
+async def test_device_read_apis_use_live_manager_snapshot(tmp_path: Path) -> None:
+    context = await _context(_config(tmp_path))
+    context.devices = FakeDeviceReader()
+    app = create_app(context)
+    transport = httpx.ASGITransport(app=app)
+    try:
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            listing = await client.get("/api/v1/devices", params={"limit": 1, "offset": 1})
+            detail = await client.get("/api/v1/devices/aabbccddee01")
+            actions = await client.get("/api/v1/devices/aabbccddee01/actions")
+            missing = await client.get("/api/v1/devices/aabbccddee99/actions")
+
+        assert listing.json()["total"] == 2
+        assert listing.json()["items"][0]["device_id"] == "aabbccddee02"
+        assert detail.json()["status"] == "online"
+        assert actions.json() == {
+            "device_id": "aabbccddee01",
+            "items": [{"name": "swing"}],
+            "count": 1,
+        }
+        assert missing.status_code == 404
+        assert missing.json()["error"]["code"] == "device_not_found"
     finally:
         await _close_context(context)
 

@@ -191,7 +191,7 @@ requested
 
 ## 9. 单进程实现边界
 
-Phase 3候选库为 `amqtt>=0.12,<0.13`：它同时提供asyncio MQTT 3.1.1 Broker和Client，发布通用Python wheel，并声明支持Python 3.11、macOS和Windows。先完成两平台启动、鉴权、ACL、重连、关闭和PyInstaller冒烟测试，再写入正式锁定依赖；验证失败时更换适配器实现，不改变领域消息和Topic合同。
+当前锁定 `amqtt>=0.12,<0.13`：Phase 3已在macOS和Windows完成Broker启动、鉴权、ACL、关闭和PyInstaller冒烟；Phase 4A已用同库Client完成Master订阅、两个fake设备真实Broker上行和本机关闭验证。设备真机重连仍需后续验收。
 
 参考：
 
@@ -212,6 +212,14 @@ Config / Logging / MessageBus / Storage
 ```
 
 关闭顺序相反：先停止新命令，再断开Gateway客户端，最后关闭Broker。嵌入式Broker不可用时，Runtime必须明确失败或按配置退回TCP，不能显示成MQTT在线。
+
+### Phase 4A已实现边界
+
+- Master Client只订阅`otto/v1/devices/+/up`，QoS 0。
+- hello必须携带`otto-mqtt/1`、MAC、名称和固件版本；MAC必须与Topic身份一致。
+- heartbeat、`otto_state`、`otto_actions`、action/stop ACK和显式error均经过有界JSON验证后转换为内部Message。
+- Device Manager维护唯一MAC Session及connecting/online/stale/offline/error连接状态；Gateway不可用时不会继续显示online。
+- 本检查点不发布`down`消息，不代表动作、stop、命令ID去重或EVA真机MQTT通过。
 
 ## 10. EVA1/EVA2真机验收
 

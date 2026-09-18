@@ -51,6 +51,9 @@
 device.connected
 device.disconnected
 device.heartbeat.received
+device.state.received
+device.state.changed
+device.transport.unavailable
 device.transport.changed
 device.actions.catalog.received
 audio.input.started
@@ -144,3 +147,5 @@ MQTT外部Topic和JSON合同见 `docs/MQTT_CONTROL_CONTRACT.md`。Gateway转换�
 - `otto_action_ack(ok=false)`、超时或断线 → `robot.action.failed`。
 - `otto_stop_ack(ok=true)`且状态为idle → `robot.stop.completed`。
 - MQTT响应的外部 `id` 映射到内部correlation链；重复外部ID不能产生第二次执行。
+
+Phase 4A实现说明：Gateway已生成`device.connected`、`device.heartbeat.received`、`device.state.received`、`device.actions.catalog.received`及ACK/error结果；Manager生成`device.state.changed`快照。外部ID到内部命令仓库的完整关联和重复执行保护尚未实现。

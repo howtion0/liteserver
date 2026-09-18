@@ -152,6 +152,17 @@ Phase 0和Phase 1已在强制门禁建立前完成但没有GitHub检查点，因
 9. 实现只读连接验证和需要安全确认的动作验证，逐步展示查询、ACK、moving和idle结果。
 10. 动作控制使用设备动作目录和参数Schema；stop独立高优先级，广播拆成单设备结果。
 
+Phase 4A检查点（`test0.4`）只完成不移动设备的上行联调端：
+
+- [x] Master凭据连接内嵌Broker并只订阅设备up Topic
+- [x] hello、heartbeat、state、actions、ACK和error严格翻译为内部Message
+- [x] MAC派生Session去重、重连代次和`connecting → online → stale → offline`状态
+- [x] SQLite schema v2保存设备快照与动作目录，重启不伪造online
+- [x] Web列表、详情、动作目录和事件流读取实时Manager状态
+- [x] 两个fake设备通过受保护OTA和真实Broker同时联调且无动作下行
+- [ ] MQTT精确down查询、动作、stop和完整命令生命周期
+- [ ] TCP回退、Xiaozhi WebSocket、固件改造与EVA1/EVA2真机验收
+
 验收：
 
 - [ ] EVA1和EVA2通过MQTT同时连接，当前IP变化不影响身份

@@ -41,6 +41,20 @@
 
 ## 最近记录
 
+### 2026-09-18 / Phase 4A / MQTT假设备只读联调端
+
+- 版本：`0.4.0`
+- Git迭代：`test0.4`，基线为已推送的 `test0.3` / `7fbb368569f162aa135c197438aabfbe861474c4`
+- 目标：在不移动真机的前提下打通受保护OTA发放、真实Broker上行、协议翻译、Device Session、SQLite和Web API/事件流。
+- 修改：新增Master MQTT Client Gateway；实现hello/heartbeat/state/actions/ACK/error翻译和MAC/Topic校验；实现设备状态机、心跳过期、Gateway故障降级、schema v2设备/动作持久化以及实时设备只读API。
+- 安全：仅订阅`otto/v1/devices/+/up`，本检查点没有下行动作发布；所有设备包限制64 KiB、16层、4096节点，拒绝重复字段、未知类型、无效结构和身份冲突；Browser API不返回MQTT凭据。
+- 本机验证：`uv lock --check` PASS；`ruff check src tests` PASS；`mypy src` PASS；`pytest -q` 45 PASS。两个独立fake设备经真实aMQTT Broker同时online，动作目录和状态不串线；down订阅超时证明测试期间无动作消息；Gateway关闭后设备立即退出online；Runtime关闭后端口释放；SQLite v1→v2迁移及重启offline恢复通过。
+- 远程验证：GitHub Actions探针run `35300950492`中macOS job `105463270409`、Windows job `105463270272`均success；两边均完成锁定安装、Ruff、mypy、45个pytest、PyInstaller构建和Broker可执行文件实跑。
+- 返工：首轮Ruff发现Device Manager两处错误类型不符合规范，改为`TypeError`；随后补齐重复hello代次、在线heartbeat持久化、动作外键写入顺序和JSON深度/节点边界并完成受影响回归。
+- 未运行：EVA1/EVA2真机、固件改造、MQTT下行查询/动作/stop、命令去重、TCP回退、Xiaozhi WebSocket、实体Windows局域网。
+- 状态：Phase 4A本地与跨平台探针门禁PASS；完整Phase 4仍进行中，等待`test0.4`最终push和远程哈希核对。
+- 下一步：下一检查点实现fake设备只读下行查询与correlation链，再推进安全动作和兼容传输。
+
 ### 2026-09-18 / Phase 3 / 本地网络控制面与Embedded MQTT Broker
 
 - 版本：`0.3.0`

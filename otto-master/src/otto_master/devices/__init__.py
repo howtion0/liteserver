@@ -1,1 +1,1 @@
-# Phase 0 device package placeholder. No implementation yet.
+"""Device session and liveness domain services."""
