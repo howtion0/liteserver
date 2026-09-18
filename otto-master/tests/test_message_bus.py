@@ -119,3 +119,23 @@ async def test_slow_subscriber_does_not_block_other_topics() -> None:
     await asyncio.wait_for(fast_received.wait(), timeout=1)
     release_slow.set()
     await bus.stop()
+
+
+@pytest.mark.asyncio
+async def test_observer_receives_every_published_topic() -> None:
+    bus = MessageBus()
+    received: list[str] = []
+
+    async def observer(message: Message) -> None:
+        received.append(message.topic)
+
+    observer_id = await bus.subscribe_observer(observer)
+    await bus.start()
+    await bus.publish(make_message("device.connected"))
+    await bus.publish(make_message("device.heartbeat.received"))
+    await bus.drain()
+
+    assert received == ["device.connected", "device.heartbeat.received"]
+    assert bus.observer_count == 1
+    assert await bus.unsubscribe_observer(observer_id) is True
+    await bus.stop()

@@ -1,4 +1,4 @@
-"""Application lifecycle and dependency assembly for Phase 1."""
+"""Application lifecycle and dependency assembly for Phase 1 and Phase 2."""
 
 from __future__ import annotations
 
@@ -12,6 +12,7 @@ from typing import Self
 
 from .config import AppConfig
 from .message_bus import MessageBus
+from .storage.database import Database, MessageLogSubscriber
 from .structured_logging import close_otto_handlers, configure_logging
 
 
@@ -28,6 +29,12 @@ class Runtime:
     def __init__(self, config: AppConfig, *, message_bus: MessageBus | None = None) -> None:
         self.config = config
         self.message_bus = message_bus or MessageBus(config.runtime.message_queue_size)
+        self.database = Database(
+            config.resolve_path(config.database.path),
+            wal=config.database.wal,
+        )
+        self._message_logger = MessageLogSubscriber(self.database)
+        self._storage_observer_id: str | None = None
         self.worker_pool = ThreadPoolExecutor(
             max_workers=config.runtime.worker_threads,
             thread_name_prefix="otto-worker",
@@ -51,7 +58,16 @@ class Runtime:
         if self._state is not RuntimeState.CREATED:
             raise RuntimeError(f"runtime cannot start from state {self._state.value}")
         configure_logging(self.config.logging, self.config.config_path.parent)
-        await self.message_bus.start()
+        try:
+            await self.database.start()
+            await self.message_bus.start()
+            self._storage_observer_id = await self.message_bus.subscribe_observer(
+                self._message_logger
+            )
+        except Exception:
+            await self.message_bus.stop()
+            await self.database.close()
+            raise
         self._state = RuntimeState.RUNNING
         self._logger.info(
             "runtime_started",
@@ -102,10 +118,16 @@ class Runtime:
                 self.message_bus.stop(), timeout=self.config.runtime.shutdown_timeout_seconds
             )
         finally:
-            self.worker_pool.shutdown(wait=True, cancel_futures=True)
-            self._state = RuntimeState.STOPPED
-            self._logger.info("runtime_stopped", extra={"event": "runtime_stopped"})
-            close_otto_handlers()
+            if self._storage_observer_id is not None:
+                await self.message_bus.unsubscribe_observer(self._storage_observer_id)
+                self._storage_observer_id = None
+            try:
+                await self.database.close()
+            finally:
+                self.worker_pool.shutdown(wait=True, cancel_futures=True)
+                self._state = RuntimeState.STOPPED
+                self._logger.info("runtime_stopped", extra={"event": "runtime_stopped"})
+                close_otto_handlers()
 
     async def _cancel_background_tasks(self) -> None:
         tasks = tuple(self._background_tasks)

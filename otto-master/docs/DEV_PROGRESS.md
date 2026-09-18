@@ -2,14 +2,13 @@
 
 ## 当前版本
 
-版本以 `pyproject.toml` 为准，当前为 `0.1.0`。
+版本以 `pyproject.toml` 为准，当前为 `0.2.0`。
 
 ## Git迭代
 
-- Phase 0和Phase 1正在建立恢复检查点；本轮支线为 `test0.1`。
-- 本轮将把“Phase 0文档 + Phase 1实现”作为一次透明的恢复基线，而不是伪造两段历史。
-- 恢复基线必须重跑Phase 1全部必需验证、补齐Session Contract和日志，随后commit、push并核对远程哈希。
-- Phase 2使用 `test0.2`；此后每个阶段或补充检查点使用下一个 `testN.N` 编号。
+- Phase 0+1恢复基线 `test0.1` 已推送，远程哈希为 `e0097c4649322175356487f13d73fde078afdd09`。
+- Phase 2本轮支线为 `test0.2`；测试全部通过后提交并推送，再核对远程哈希。
+- 此后每个阶段或补充检查点使用下一个 `testN.N` 编号。
 - 支线编号与产品版本分别记录，互不驱动。
 
 ## 当前状态
@@ -18,7 +17,7 @@
 |---|---|
 | Phase 0 文档脚手架 | 已完成 |
 | Phase 1 Runtime与Message Bus | 已完成 |
-| Phase 2 SQLite | 未开始 |
+| Phase 2 SQLite | 已完成 |
 | Phase 3 Web/OTA/mDNS/Embedded MQTT Broker | 未开始 |
 | Phase 4 MQTT控制/TCP回退/WebSocket兼容 | 未开始 |
 | Phase 5 Opus/ASR/TTS | 未开始 |
@@ -26,8 +25,8 @@
 | Phase 7 LLM/Dispatcher/动作 | 未开始 |
 | Phase 8 集群/日志/容错 | 未开始 |
 | Phase 9 Windows打包 | 未开始 |
-| Python业务实现 | Phase 1已实现；后续业务模块仍为空占位 |
-| 自动测试 | 10通过 |
+| Python业务实现 | Phase 1+2已实现；后续业务模块仍为空占位 |
+| 自动测试 | 16通过 |
 | 硬件验证 | 未运行 |
 
 ## 已完成
@@ -42,16 +41,19 @@
 - LLM Provider已选定为DeepSeek官方OpenAI兼容接口；密钥仍只从本地环境变量读取。
 - 已将MQTT确定为目标集群控制通道：同一Python进程内嵌Broker，TCP作为迁移回退，WebSocket保留兼容。
 - 已记录用户提供的固件 `2.0.5` 真机基线：EVA1/EVA2同网段在线、各14动作、`swing`与`stop`后回到idle；该结果来自当前TCP控制链路，不计为MQTT验收通过。
+- 已冻结打包前Server控制台P0需求：系统与Broker健康、设备接入、只读连接验证、安全动作验证、命令生命周期、事件恢复、安全、OTA和Windows冒烟标准。
 - Phase 1已实现YAML配置加载、dotenv/环境变量替换、消息合同校验、精确主题Message Bus、Runtime优雅关闭、统一线程池和JSONL结构化日志。
 - Phase 1已通过 `ruff check src tests`、`mypy src`、10个pytest单元测试，以及 `python -m otto_master` 启动/中断退出冒烟测试。
+- Phase 2已实现aiosqlite连接生命周期、schema migration、设备/分组/消息/命令/结果/设置表、消息observer、敏感字段脱敏、payload大小限制和单写者事务入口。
+- Phase 2已通过首次建库、重复迁移、100路并发消息写入、脱敏、Runtime关闭刷盘和全量16个pytest测试；默认入口实际生成 `data/otto.db` 并正常关闭。
 
 ## 进行中
 
-- 无。Phase 1已完成，等待Phase 2 SQLite持久化。
+- 无。Phase 2已完成，等待Phase 3 Web、REST、OTA、mDNS和内嵌MQTT Broker。
 
 ## 下一步
 
-完成 `test0.1` 恢复基线后，在 `test0.2` 进入Phase 2，实现SQLite连接生命周期、版本化迁移、消息日志订阅者和敏感字段过滤；继续不接硬件和真实云API。
+下一步使用 `test0.3` 进入Phase 3，实现Web、REST、OTA、mDNS和内嵌MQTT Broker；继续遵守先备份、冻结契约、测试和远程核对门禁。
 
 ## 已知风险
 

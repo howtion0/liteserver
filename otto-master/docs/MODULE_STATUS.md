@@ -1,13 +1,13 @@
 # Module Status
 
-当前已完成Phase 1核心模块；其余模块仍为计划中的空占位。“文件存在”不代表实现。
+当前已完成Phase 2核心模块；其余模块仍为计划中的空占位。“文件存在”不代表实现。
 
 | 模块 | 文件 | 状态 |
 |---|---|---|
 | Package entry | `__main__.py` | Phase 1已实现 |
-| Runtime | `runtime.py` | Phase 1已实现 |
+| Runtime | `runtime.py` | Phase 1+2已实现 |
 | Messages | `messages.py` | Phase 1已实现 |
-| Message Bus | `message_bus.py` | Phase 1已实现 |
+| Message Bus | `message_bus.py` | Phase 1+2已实现（含全消息observer） |
 | Config | `config.py` | Phase 1已实现 |
 | Structured logging | `structured_logging.py` | Phase 1已实现 |
 | Device WebSocket Gateway | `gateways/device_ws.py` | 空占位 |
@@ -26,14 +26,15 @@
 | WakeGate | `services/wake_gate.py` | 空占位 |
 | Dispatcher | `dispatch/dispatcher.py` | 空占位 |
 | Opus | `audio/opus.py` | 空占位 |
-| Database | `storage/database.py` | 空占位 |
-| Migrations | `storage/migrations.py` | 空占位 |
+| Database | `storage/database.py` | Phase 2已实现 |
+| Migrations | `storage/migrations.py` | Phase 2已实现 |
 | WebUI HTML | `web/index.html` | 空占位 |
 | WebUI JavaScript | `web/app.js` | 空占位 |
 | WebUI CSS | `web/style.css` | 空占位 |
 | Message Bus tests | `tests/test_message_bus.py` | Phase 1已实现 |
 | Message contract tests | `tests/test_messages.py` | Phase 1已实现 |
 | Config tests | `tests/test_config.py` | Phase 1已实现 |
-| Runtime tests | `tests/test_runtime.py` | Phase 1已实现 |
+| Runtime tests | `tests/test_runtime.py` | Phase 1+2已实现 |
+| Storage tests | `tests/test_storage.py` | Phase 2已实现 |
 | WakeGate tests | `tests/test_wake_gate.py` | Phase 6待实现 |
 | Dispatcher tests | `tests/test_dispatcher.py` | Phase 7待实现 |

@@ -98,10 +98,10 @@ Phase 0和Phase 1已在强制门禁建立前完成但没有GitHub检查点，因
 
 验收：
 
-- [ ] 首次运行生成有效 `data/otto.db`
-- [ ] 重复迁移幂等
-- [ ] 并发写入测试无未处理锁错误
-- [ ] Runtime关闭前刷新在途数据
+- [x] 首次运行生成有效 `data/otto.db`
+- [x] 重复迁移幂等
+- [x] 并发写入测试无未处理锁错误
+- [x] Runtime关闭前刷新在途数据
 
 ## Phase 3：Web、REST、OTA、mDNS与Embedded MQTT Broker
 

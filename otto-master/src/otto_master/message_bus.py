@@ -38,6 +38,7 @@ class MessageBus:
             raise ValueError("queue_size must be at least 1")
         self._queue: asyncio.Queue[Message] = asyncio.Queue(maxsize=queue_size)
         self._subscriptions: dict[str, _Subscription] = {}
+        self._observers: dict[str, _Subscription] = {}
         self._delivery_tasks: set[asyncio.Task[None]] = set()
         self._delivery_failures: list[DeliveryFailure] = []
         self._worker: asyncio.Task[None] | None = None
@@ -55,6 +56,10 @@ class MessageBus:
     @property
     def subscription_count(self) -> int:
         return len(self._subscriptions)
+
+    @property
+    def observer_count(self) -> int:
+        return len(self._observers)
 
     @property
     def delivery_failures(self) -> tuple[DeliveryFailure, ...]:
@@ -90,6 +95,18 @@ class MessageBus:
     async def unsubscribe(self, subscription_id: str) -> bool:
         return self._subscriptions.pop(subscription_id, None) is not None
 
+    async def subscribe_observer(self, callback: Subscriber) -> str:
+        """Subscribe to every published message without adding wildcard topics."""
+
+        if not callable(callback):
+            raise TypeError("callback must be callable")
+        observer_id = f"observer-{uuid4()}"
+        self._observers[observer_id] = _Subscription(observer_id, "", callback)
+        return observer_id
+
+    async def unsubscribe_observer(self, observer_id: str) -> bool:
+        return self._observers.pop(observer_id, None) is not None
+
     async def publish(self, message: Message) -> None:
         if not self._running:
             raise RuntimeError("message bus is not running")
@@ -121,7 +138,8 @@ class MessageBus:
                     for subscription in self._subscriptions.values()
                     if subscription.topic == message.topic
                 )
-                for subscription in subscriptions:
+                observers = tuple(self._observers.values())
+                for subscription in (*subscriptions, *observers):
                     task = asyncio.create_task(
                         self._deliver(subscription, message),
                         name=f"otto-delivery-{subscription.subscription_id}",

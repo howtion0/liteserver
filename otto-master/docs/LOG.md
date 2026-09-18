@@ -95,6 +95,29 @@
 - 风险：当前Phase 0+1仍未备份到GitHub，在恢复基线push并核对哈希前禁止Phase 2施工。
 - 下一步：执行 `test0.1` 恢复基线门禁。
 
+### 2026-09-18 / Phase 2 / SQLite持久化与迁移
+
+- 版本：`0.2.0`
+- Git迭代：`test0.2`，基线为已推送的 `test0.1` / `e0097c4649322175356487f13d73fde078afdd09`
+- 目标：建立SQLite连接生命周期、版本化迁移、消息日志脱敏和Runtime关闭刷盘。
+- 修改：`storage/database.py`、`storage/migrations.py`、`storage/__init__.py`、`message_bus.py`、`runtime.py`、Phase 2测试、版本与施工记录。
+- 验证：首次建库schema version=1；重复迁移通过；100路并发消息写入通过；敏感字段和原始音频字段脱敏；Runtime关闭后12条在途消息全部落盘；全量 `pytest -q` 为16通过；Ruff和mypy strict通过；默认入口生成 `data/otto.db` 并输出数据库关闭日志。
+- 返工：首次静态检查发现storage导入排序和`__all__`排序问题，按ruff提示修正后重跑通过；无功能测试失败。
+- 未运行：真实云API、ESP32硬件、Web、MQTT、Windows和跨平台打包；这些不属于Phase 2。
+- 风险：设备、Web和外部Gateway仍未实现；SQLite目前由单进程单连接控制，后续多进程部署不在MVP范围。
+- 下一步：在 `test0.2` 远程检查点基础上创建 `test0.3`，进入Phase 3。
+
+### 2026-09-18 / 需求 / 冻结打包前Server控制台P0范围
+
+- 版本：`0.1.0`
+- Git迭代：编写时 `test0.1` 恢复基线已建立，工作区处于进行中的 `test0.2` Phase 2；本需求文档尚未commit或push，避免把未验收的Phase 2代码一并提交。
+- 目标：列清合格MQTT Server控制台在打包前必须完成的前端、设备接入、连接验证、动作控制和跨平台验收要求。
+- 修改：新增控制台信息架构、设备状态机、只读与动作两级验证、Browser API、安全边界、命令闭环、事件恢复、OTA、P0测试矩阵和打包准入定义。
+- 关键决定：浏览器只连接Python Web Gateway，不持有MQTT凭据或直接发布Topic；publish和ACK不等于动作完成，必须跟踪到moving和idle。
+- 验证：文档存在性、关键需求和交叉引用检查；未修改前后端业务代码，未运行应用或真机测试。
+- 风险：控制台、MQTT Gateway和Browser API仍未实现，本记录不能作为功能通过证据。
+- 下一步：先完成并验收当前Phase 2，再按后续新支线和Phase 3、Phase 4实现控制台P0能力；合并main仍需单独授权。
+
 ### 2026-09-18 / Phase 0+1 / 恢复基线 test0.1
 
 - 版本：`0.1.0`
