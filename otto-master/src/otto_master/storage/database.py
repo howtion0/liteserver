@@ -218,7 +218,82 @@ class Database:
                 return None
             result = dict(row)
             result["payload"] = json.loads(str(result["payload_json"]))
+            result.pop("payload_json", None)
             return result
+
+    async def list_messages(
+        self,
+        *,
+        after: int = 0,
+        limit: int = 100,
+    ) -> list[dict[str, Any]]:
+        if after < 0:
+            raise ValueError("after must not be negative")
+        if not 1 <= limit <= 500:
+            raise ValueError("limit must be between 1 and 500")
+        async with self._operation_lock:
+            connection = self._require_connection()
+            cursor = await connection.execute(
+                """
+                SELECT rowid AS cursor, *
+                FROM messages
+                WHERE rowid > ?
+                ORDER BY rowid ASC
+                LIMIT ?
+                """,
+                (after, limit),
+            )
+            try:
+                rows = await cursor.fetchall()
+            finally:
+                await cursor.close()
+        messages: list[dict[str, Any]] = []
+        for row in rows:
+            result = dict(row)
+            result["payload"] = json.loads(str(result.pop("payload_json")))
+            messages.append(result)
+        return messages
+
+    async def list_devices(self, *, limit: int = 100, offset: int = 0) -> list[dict[str, Any]]:
+        if not 1 <= limit <= 500:
+            raise ValueError("limit must be between 1 and 500")
+        if offset < 0:
+            raise ValueError("offset must not be negative")
+        async with self._operation_lock:
+            connection = self._require_connection()
+            cursor = await connection.execute(
+                """
+                SELECT device_id, name, transport, status, capabilities_json,
+                       created_at, updated_at
+                FROM devices
+                ORDER BY name COLLATE NOCASE, device_id
+                LIMIT ? OFFSET ?
+                """,
+                (limit, offset),
+            )
+            try:
+                rows = await cursor.fetchall()
+            finally:
+                await cursor.close()
+        return [self._device_row(row) for row in rows]
+
+    async def fetch_device(self, device_id: str) -> dict[str, Any] | None:
+        async with self._operation_lock:
+            connection = self._require_connection()
+            cursor = await connection.execute(
+                """
+                SELECT device_id, name, transport, status, capabilities_json,
+                       created_at, updated_at
+                FROM devices
+                WHERE device_id = ?
+                """,
+                (device_id,),
+            )
+            try:
+                row = await cursor.fetchone()
+            finally:
+                await cursor.close()
+        return self._device_row(row) if row is not None else None
 
     async def save_setting(self, key: str, value: JsonValue) -> None:
         if not key.strip():
@@ -237,6 +312,24 @@ class Database:
                 (key, value_json, now),
             )
             await connection.commit()
+
+    async def load_settings(self) -> dict[str, JsonValue]:
+        async with self._operation_lock:
+            connection = self._require_connection()
+            cursor = await connection.execute(
+                "SELECT key, value_json FROM settings ORDER BY key"
+            )
+            try:
+                rows = await cursor.fetchall()
+            finally:
+                await cursor.close()
+        return {str(row["key"]): json.loads(str(row["value_json"])) for row in rows}
+
+    @staticmethod
+    def _device_row(row: aiosqlite.Row) -> dict[str, Any]:
+        result = dict(row)
+        result["capabilities"] = json.loads(str(result.pop("capabilities_json")))
+        return result
 
     async def _count_rows(self, table: str) -> int:
         if table not in {"devices", "device_groups", "messages", "commands", "command_results", "settings"}:

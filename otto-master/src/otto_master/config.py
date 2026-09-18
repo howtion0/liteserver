@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 import re
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -24,9 +24,23 @@ class ProjectConfig:
 
 @dataclass(frozen=True, slots=True)
 class ServerConfig:
+    enabled: bool
     host: str
     port: int
     websocket_path: str
+    console_token_env: str
+    allowed_origins: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class MqttConfig:
+    enabled: bool
+    host: str
+    port: int
+    max_connections: int
+    credentials_path: str
+    master_username: str
+    master_password_env: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -88,6 +102,9 @@ class CloudConfig:
 class OtaConfig:
     enabled: bool
     firmware_path: str
+    firmware_version: str
+    target_hardware: str
+    provisioning_token_env: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -97,11 +114,21 @@ class LoggingConfig:
 
 
 @dataclass(frozen=True, slots=True)
+class RuntimeSecrets:
+    """Selected runtime secrets loaded without exposing the full environment."""
+
+    console_token: str | None = field(default=None, repr=False)
+    mqtt_master_password: str | None = field(default=None, repr=False)
+    provisioning_token: str | None = field(default=None, repr=False)
+
+
+@dataclass(frozen=True, slots=True)
 class AppConfig:
     """Validated configuration plus the file it was loaded from."""
 
     project: ProjectConfig
     server: ServerConfig
+    mqtt: MqttConfig
     runtime: RuntimeConfig
     discovery: DiscoveryConfig
     database: DatabaseConfig
@@ -112,6 +139,7 @@ class AppConfig:
     logging: LoggingConfig
     config_path: Path
     env_file: Path | None
+    secrets: RuntimeSecrets = field(repr=False)
 
     def resolve_path(self, value: str | Path) -> Path:
         """Resolve a relative runtime path against the config directory."""
@@ -173,6 +201,22 @@ def _bool(section: Mapping[str, Any], name: str, path: str) -> bool:
     value = section.get(name)
     if not isinstance(value, bool):
         raise ConfigError(f"{path}.{name} must be a boolean")
+    return value
+
+
+def _string_list(section: Mapping[str, Any], name: str, path: str) -> tuple[str, ...]:
+    value = section.get(name)
+    if not isinstance(value, list) or not all(
+        isinstance(item, str) and item.strip() for item in value
+    ):
+        raise ConfigError(f"{path}.{name} must be a list of non-empty strings")
+    return tuple(value)
+
+
+def _optional_secret(environment: Mapping[str, str], name: str) -> str | None:
+    value = environment.get(name)
+    if value is None or not value.strip() or value.strip() == "replace_me":
+        return None
     return value
 
 
@@ -239,11 +283,13 @@ def load_config(
 
     selected_env_file = Path(env_file) if env_file is not None else config_path.parent / ".env"
     selected_env_file = selected_env_file.expanduser().resolve()
+    selected_environment = _environment(selected_env_file, environment)
     raw_loaded = yaml.safe_load(config_path.read_text(encoding="utf-8"))
-    root = _mapping(_substitute(raw_loaded, _environment(selected_env_file, environment)), "config")
+    root = _mapping(_substitute(raw_loaded, selected_environment), "config")
 
     project = _section(root, "project")
     server = _section(root, "server")
+    mqtt = _section(root, "mqtt")
     runtime = _section(root, "runtime")
     discovery = _section(root, "discovery")
     database = _section(root, "database")
@@ -253,6 +299,10 @@ def load_config(
     ota = _section(root, "ota")
     logging_config = _section(root, "logging")
 
+    console_token_env = _string(server, "console_token_env", "server")
+    master_password_env = _string(mqtt, "master_password_env", "mqtt")
+    provisioning_token_env = _string(ota, "provisioning_token_env", "ota")
+
     cloud_asr = _section(cloud, "asr")
     cloud_llm = _section(cloud, "llm")
     cloud_tts = _section(cloud, "tts")
@@ -260,9 +310,21 @@ def load_config(
     return AppConfig(
         project=ProjectConfig(name=_string(project, "name", "project")),
         server=ServerConfig(
+            enabled=_bool(server, "enabled", "server"),
             host=_string(server, "host", "server"),
             port=_int(server, "port", "server", minimum=1),
             websocket_path=_string(server, "websocket_path", "server"),
+            console_token_env=console_token_env,
+            allowed_origins=_string_list(server, "allowed_origins", "server"),
+        ),
+        mqtt=MqttConfig(
+            enabled=_bool(mqtt, "enabled", "mqtt"),
+            host=_string(mqtt, "host", "mqtt"),
+            port=_int(mqtt, "port", "mqtt", minimum=1),
+            max_connections=_int(mqtt, "max_connections", "mqtt", minimum=1),
+            credentials_path=_string(mqtt, "credentials_path", "mqtt"),
+            master_username=_string(mqtt, "master_username", "mqtt"),
+            master_password_env=master_password_env,
         ),
         runtime=RuntimeConfig(
             message_queue_size=_int(runtime, "message_queue_size", "runtime", minimum=1),
@@ -306,6 +368,9 @@ def load_config(
         ota=OtaConfig(
             enabled=_bool(ota, "enabled", "ota"),
             firmware_path=_string(ota, "firmware_path", "ota"),
+            firmware_version=_string(ota, "firmware_version", "ota"),
+            target_hardware=_string(ota, "target_hardware", "ota"),
+            provisioning_token_env=provisioning_token_env,
         ),
         logging=LoggingConfig(
             level=_string(logging_config, "level", "logging").upper(),
@@ -313,4 +378,9 @@ def load_config(
         ),
         config_path=config_path,
         env_file=selected_env_file if selected_env_file.is_file() else None,
+        secrets=RuntimeSecrets(
+            console_token=_optional_secret(selected_environment, console_token_env),
+            mqtt_master_password=_optional_secret(selected_environment, master_password_env),
+            provisioning_token=_optional_secret(selected_environment, provisioning_token_env),
+        ),
     )

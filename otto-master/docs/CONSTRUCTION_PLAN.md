@@ -118,17 +118,22 @@ Phase 0和Phase 1已在强制门禁建立前完成但没有GitHub检查点，因
 7. OTA按MAC下发 `master.local:1883`、独立client_id、凭据和每设备Topic。
 8. Broker健康状态、匿名访问关闭和最小Topic ACL。
 9. 对 `amqtt>=0.12,<0.13` 做macOS与Windows可行性验证，通过后才锁定依赖。
+10. 按 `docs/SERVER_CONSOLE_REQUIREMENTS.md` 实现Server状态、Broker状态、设备列表、事件流和设置页的P0骨架。
+11. Browser API只通过Web Gateway、Message Bus和Dispatcher进入控制链，浏览器不得直连MQTT Broker。
 
 验收：
 
-- [ ] 浏览器可打开WebUI
+- [x] 浏览器可打开WebUI
 - [ ] macOS和Windows地址行为一致
-- [ ] 固件不存在时明确返回404
-- [ ] mDNS注册和注销均可观测
+- [x] 固件不存在时明确返回404
+- [x] mDNS注册和注销均可观测
 - [ ] 无需另装Broker即可在macOS和Windows启动MQTT服务
-- [ ] 匿名MQTT连接被拒绝，设备不能订阅其他MAC的down Topic
-- [ ] OTA返回 `otto/v1/devices/{device_id}/up|down`，不返回固定IP
+- [x] 匿名MQTT连接被拒绝，设备不能订阅其他MAC的down Topic
+- [x] OTA返回 `otto/v1/devices/{device_id}/up|down`，不返回固定IP
 - [ ] Broker候选在macOS和Windows完成启动、鉴权、消息往返、关闭及PyInstaller冒烟测试
+- [x] WebUI显示Server、Broker、SQLite、mDNS和OTA组件的真实健康状态
+- [x] 页面刷新或事件流重连后，快照与增量状态一致
+- [x] Browser API和WebUI不返回MQTT密码、云API Key或任意Topic发布入口；受保护的设备发放接口除外
 
 ## Phase 4：MQTT集群控制、TCP回退与Device Session
 
@@ -144,6 +149,8 @@ Phase 0和Phase 1已在强制门禁建立前完成但没有GitHub检查点，因
 6. TCP `otto-master/1` Gateway作为迁移回退，输出相同内部Message。
 7. Xiaozhi WebSocket握手、JSON和二进制Opus继续作为兼容Profile。
 8. WebUI显示在线、动态IP、名称、MAC、固件、能力、实际传输和心跳。
+9. 实现只读连接验证和需要安全确认的动作验证，逐步展示查询、ACK、moving和idle结果。
+10. 动作控制使用设备动作目录和参数Schema；stop独立高优先级，广播拆成单设备结果。
 
 验收：
 
@@ -157,6 +164,10 @@ Phase 0和Phase 1已在强制门禁建立前完成但没有GitHub检查点，因
 - [ ] 一台设备断开不影响另一台
 - [ ] Broker重启后设备可重连；失败时WebUI不伪报在线
 - [ ] TCP回退启用时WebUI明确显示 `transport=tcp`
+- [ ] 只读连接验证不移动机器人，并逐项验证心跳、状态查询和动作目录
+- [ ] 安全动作验证必须完成 `accepted → moving → idle`，超时路径自动stop并确认idle
+- [ ] 页面只显示publish或ACK时不得标记动作完成
+- [ ] WebUI刷新后能恢复正在执行命令及最终结果
 
 ## Phase 5：Opus与云端ASR/TTS
 
@@ -249,6 +260,7 @@ Phase 0和Phase 1已在强制门禁建立前完成但没有GitHub检查点，因
 3. Windows启动、退出和防火墙说明。
 4. 配置、数据、日志和固件目录布局。
 5. 升级与回滚文档。
+6. 完成 `docs/SERVER_CONSOLE_REQUIREMENTS.md` 全部P0控制台与打包冒烟项目。
 
 验收：
 
@@ -256,6 +268,9 @@ Phase 0和Phase 1已在强制门禁建立前完成但没有GitHub检查点，因
 - [ ] WebUI、mDNS、SQLite、OTA和内嵌MQTT Broker可用
 - [ ] EVA1和EVA2完整语音及动作流程通过
 - [ ] 退出后无残留进程和锁定数据库
+- [ ] 静态资源离线可用，不依赖Node.js、CDN或外部MQTT Broker
+- [ ] 浏览器长时间打开、刷新和断网恢复后，设备和命令状态保持一致
+- [ ] 端口冲突、防火墙、数据目录和组件启动失败都有明确诊断
 
 ## 1.0.0 MVP验收场景
 

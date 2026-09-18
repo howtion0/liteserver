@@ -2,9 +2,24 @@ project:
   name: otto-master
 
 server:
+  enabled: true
   host: 0.0.0.0
   port: 8080
   websocket_path: /xiaozhi/v1/
+  console_token_env: OTTO_CONSOLE_TOKEN
+  allowed_origins:
+    - http://127.0.0.1:8080
+    - http://localhost:8080
+    - http://master.local:8080
+
+mqtt:
+  enabled: true
+  host: 0.0.0.0
+  port: 1883
+  max_connections: 100
+  credentials_path: .local-secrets/mqtt-credentials.json
+  master_username: otto-master
+  master_password_env: OTTO_MQTT_MASTER_PASSWORD
 
 runtime:
   message_queue_size: 1024
@@ -55,6 +70,9 @@ cloud:
 ota:
   enabled: true
   firmware_path: firmware/xiaozhi.bin
+  firmware_version: unknown
+  target_hardware: unknown
+  provisioning_token_env: OTTO_PROVISIONING_TOKEN
 
 logging:
   level: INFO

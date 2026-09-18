@@ -1,0 +1,64 @@
+name: Otto Master Phase 3
+
+on:
+  push:
+    branches:
+      - "test0.*"
+    paths:
+      - "otto-master/**"
+      - ".github/workflows/otto-master-phase3.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  cross-platform:
+    name: ${{ matrix.os }} / Python ${{ matrix.python-version }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+        python-version: ["3.12"]
+
+    defaults:
+      run:
+        working-directory: otto-master
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: ${{ matrix.python-version }}
+          enable-cache: true
+          cache-dependency-glob: otto-master/uv.lock
+
+      - name: Install locked environment
+        run: uv sync --all-extras --locked
+
+      - name: Ruff
+        run: uv run ruff check src tests
+
+      - name: Mypy
+        run: uv run mypy src
+
+      - name: Tests
+        run: uv run pytest -q
+
+      - name: Build embedded broker smoke executable
+        run: >-
+          uv run pyinstaller --clean --noconfirm --onefile
+          --name mqtt-broker-smoke --paths src
+          --distpath dist-smoke --workpath build-smoke
+          tests/packaging/mqtt_broker_smoke.py
+
+      - name: Run broker smoke executable (macOS)
+        if: runner.os == 'macOS'
+        run: ./dist-smoke/mqtt-broker-smoke
+
+      - name: Run broker smoke executable (Windows)
+        if: runner.os == 'Windows'
+        run: ./dist-smoke/mqtt-broker-smoke.exe

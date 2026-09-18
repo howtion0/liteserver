@@ -93,13 +93,14 @@ Gateway or Storage consumes output
 
 ### 5.2 Embedded MQTT Broker
 
-计划文件：`gateways/mqtt_broker.py`
+文件：`gateways/mqtt_broker.py`
 
 职责：
 
 - 在Otto Master进程内启动和关闭MQTT 3.1.1 Broker。
 - 监听局域网MQTT端口并执行设备认证和Topic ACL。
 - 暴露Broker健康状态，不把Broker库类型泄漏给业务模块。
+- 运行时凭据只保存到`.local-secrets`，设备凭据绑定稳定device_id和client_id。
 
 禁止：
 
@@ -146,8 +147,10 @@ TCP不是第二套业务模型。Dispatcher只生成一次领域命令，由Devi
 - 提供WebUI静态资源、REST、状态推送和OTA下载。
 - 校验输入并发布内部命令。
 - 将查询结果转换为HTTP响应。
+- 用有界事件历史、服务端stream ID和cursor支持浏览器断线恢复。
+- 设备发放接口与Browser API分离；只有受保护的发放响应可以返回该设备自己的MQTT凭据。
 
-WebUI不能直接获得或持有设备Socket。
+WebUI不能直接获得或持有设备Socket或MQTT设备凭据，也不能指定任意MQTT Topic。
 
 ### 5.6 Cloud Gateway
 
@@ -292,7 +295,7 @@ SQLite建议实体：
 - 阻塞SDK用统一线程池，不允许模块私建线程池。
 - 本地模型如果以后加入，使用独立进程池并作为扩展方案。
 - MQTT控制消息使用有界队列；连续音频不经过该控制队列。
-- 关闭顺序：停止接入 → 停止新命令 → 等待在途任务 → 断开MQTT Gateway → 关闭嵌入式Broker → 刷新数据库 → 注销mDNS → 关闭进程池。
+- 关闭顺序：注销mDNS/停止新发现 → 停止Web接入 → 等待Message Bus在途任务 → 断开MQTT Gateway → 关闭嵌入式Broker → 刷新数据库 → 关闭进程池。
 
 ## 14. 设备传输策略
 
