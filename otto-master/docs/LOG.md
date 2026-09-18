@@ -279,7 +279,7 @@
 - 构建与OTA：ESP-IDF 5.5.5完整构建2.0.15，镜像3,830,880字节，SHA256 `e1ca9051c8f6a2aac1bef3e47323c1927ef6bebc3b901ae52bc393f9ad4595e6`。EVA1 OTA后hello确认2.0.15，运行态确认音量100；Server健康状态确认TTS增益2.0、EVA1 MQTT online。
 - 固件提交：上述2.0.15源码已精确提交并推送到`howtion0/otto`的`codex/otto-portable@c6addc6a35bf54c6c28f07fde53828cd73bce1f0`；远端SHA复核一致，未推main、未创建tag。
 - 真机：正式Web控制已完成多种动作和对话start/stop，最终idle；EVA1后续完成五轮问答、语音动作、空识别熔断和8秒静默退出，用户确认当前“对话感觉没问题了”，2.0倍TTS与整体流畅度主观PASS。EVA2已重新在线但本轮未触碰，没有把在线状态或fake双设备并发冒充真机双设备通过。动作图切换/恢复仍待用户目视确认。
-- 自动验证：首轮全量测试暴露旧`AudioConfig`直接构造缺省值和本机控制台令牌污染Runtime WebSocket测试，分别用安全unity回退和显式测试环境隔离修复；后续新增ASR三端点/原子清理、连续空final、VAD-only静默、音效排空和WebUI授权回归。最终`uv lock --check`、Ruff、mypy strict（38个源码文件）、183项pytest、Node语法和`git diff --check`通过；上一run Windows测试时限问题已修，最终CI待本轮push。
+- 自动验证：首轮全量测试暴露旧`AudioConfig`直接构造缺省值和本机控制台令牌污染Runtime WebSocket测试，分别用安全unity回退和显式测试环境隔离修复；后续新增ASR三端点/原子清理、连续空final、VAD-only静默、音效排空和WebUI授权回归。最终`uv lock --check`、Ruff、mypy strict（38个源码文件）、183项pytest、Node语法和`git diff --check`通过；Windows测试同步边界随后收口，最终run `35403562279`双平台及打包smoke全部PASS。
 - 运行链路：EVA1继续使用“MQTT控制/信令 + AES-128-CTR UDP Opus → 本机Otto Master → 火山ASR/TTS + DeepSeek”，不是官方小智云后端。
 - 排除：根目录用户`README.md`、`.DS_Store`、贴图源目录与ZIP、`.env`、数据库、日志、构建输出和固件二进制不进入提交；密钥未写入文档或Git差异。
 
@@ -292,4 +292,4 @@
 - EVA1真机：一轮连续两次空final后只发生一次恢复笑声，随后回waiting且无第三次笑声/failed；另一轮完成五次有效问答，均由`partial_stability`收句，端点约3.309至8.304秒、final约0.078至0.196秒，五次TTS全部完成。“奶酪前进”正确进入`self_otto_walk_forward`并由Dispatcher完成动作，按钮`device_goodbye`退出正常。
 - 静默门禁：独立会话中设备继续产生9次VAD-only事件，WakeGate仍在开放监听后约8秒以`idle_timeout`退出；最终EVA1 waiting/idle，活动ASR与UDP session均为0。EVA2虽重新在线但本轮未向其下发语音或动作命令。
 - 用户验收：在上述修复后的EVA1链路上，用户确认“对话感觉没问题了”；当前对话流畅度、设备音量100与服务端2.0倍TTS听感由待确认改为主观PASS，未将该结论外推到动作贴图或EVA2。
-- 自动验证：锁文件、Ruff、mypy strict（38个源码文件）、Node语法、`git diff --check`和全量183项pytest通过。`b4a694b`的run `35400612369`在Windows暴露10 ms笑声重试测试时限；`1c10865`的run `35403162431`为macOS成功，Windows继续暴露新空识别测试于waiting后抢跑检查异步close记录。两处都只加固测试等待：前者改为0.1/1秒，后者显式等待会话关闭事实；生产配置和状态机未放宽。本地30轮Windows敏感WakeGate重复测试通过，最终CI待后续push。
+- 自动验证：锁文件、Ruff、mypy strict（38个源码文件）、Node语法、`git diff --check`和全量183项pytest通过。`b4a694b`的run `35400612369`在Windows暴露10 ms笑声重试测试时限；`1c10865`的run `35403162431`又暴露waiting后异步close断言抢跑。前者改为0.1/1秒，后者显式等待会话关闭事实，生产配置和状态机均未放宽；本地30轮Windows敏感用例通过。收口提交`51a1b48`对应run `35403562279`的macOS/Windows Tests、原生Opus加载和打包smoke全部PASS。

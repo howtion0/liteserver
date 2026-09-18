@@ -1,6 +1,6 @@
 # Module Status
 
-当前已完成Phase 1-4的软件基座和Phase 4E双机控制门禁；`test0.9`完成EVA1的火山ASR/TTS、DeepSeek文本/工具流、MQTT UDP音频和循环WakeGate纵向链，`test1.0`新增多设备WebUI、对话投影、快捷/批量控制、正式对话控制、ASR三端点与清理加固、空识别熔断、动作音效排空判据、TTS增益与固件看山表情。当前本地183个测试通过，EVA1五轮真实问答、语音动作、按钮退出、8秒静默退出及用户对话/TTS听感已验收；动作图、第二台语音工具隔离、WebSocket真机、test1.0最终CI与Windows实体部署仍未完成。
+当前已完成Phase 1-4的软件基座和Phase 4E双机控制门禁；`test0.9`完成EVA1的火山ASR/TTS、DeepSeek文本/工具流、MQTT UDP音频和循环WakeGate纵向链，`test1.0`新增多设备WebUI、对话投影、快捷/批量控制、正式对话控制、ASR三端点与清理加固、空识别熔断、动作音效排空判据、TTS增益与固件看山表情。当前本地183个测试及GitHub run `35403562279`的macOS/Windows矩阵通过，EVA1五轮真实问答、语音动作、按钮退出、8秒静默退出及用户对话/TTS听感已验收；动作图、第二台语音工具隔离、WebSocket真机与Windows实体部署仍未完成。
 
 | 模块 | 文件 | 状态 |
 |---|---|---|
@@ -67,4 +67,4 @@
 | 双机隔离 | EVA1与EVA2分别动作时另一台保持idle；身份、凭据与精确topic按MAC隔离 |
 | 本地音效 | 奶龙笑声约2.0065秒、24 kHz OpusHead/34个60 ms包；EVA1连续两轮观测`moving/laugh/busy=true → idle/false`，不再产生15秒Dispatcher悬挂 |
 | 安全与恢复 | 无`current_token`改配被拒绝；相同命令ID仅重放缓存ACK；Server/Broker重启后双机重新hello、verify与WebUI恢复 |
-| 未完成 | EVA1看山动作图切换/恢复目视确认、EVA2语音工具隔离、WebSocket真机Profile、`test1.0`最终CI及实体Windows局域网 |
+| 未完成 | EVA1看山动作图切换/恢复目视确认、EVA2语音工具隔离、WebSocket真机Profile及实体Windows局域网 |

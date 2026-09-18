@@ -17,7 +17,7 @@
 - Phase 4D最终支线 `test0.7` 已推送，远程哈希为 `2b22a724d7169c2f84c5e028b95f40de7c0c4964`；正式run `35309478483`的macOS/Windows jobs均PASS。
 - Phase 4E真机支线为 `test0.8`，从已验收的 `test0.7` 继续；两台EVA控制、锁定改配拒绝、重复ID和Server/Broker重启恢复均已通过，正式CI待提交后运行。
 - Phase 5纵向MVP支线`test0.9`已推送，远程哈希为`a2c22fb144beece1676625c39deee2b7d223d9df`；GitHub Actions run `35384613680`的macOS/Windows jobs均PASS。
-- 当前工作支线为`test1.0`，从上述已验收基线继续，包含多设备WebUI、对话/工具加固、TTS音量和看山表情。首个提交`b4a694b1c5b6bf39bdb4cb4288b42cfc27268876`的run `35400612369`为macOS成功、Windows测试时限失败；对话修复提交`1c10865b96bf87c70732d5e7000db09357d3b6dc`已推送。其run `35403162431`为macOS成功，Windows唯一失败是新空识别测试在状态先变为waiting后抢跑检查异步close记录；测试现显式等待会话清理完成，本地183项及30轮Windows敏感用例通过，后续提交重跑最终CI。
+- 当前工作支线为`test1.0`，从上述已验收基线继续，包含多设备WebUI、对话/工具加固、TTS音量和看山表情。首个提交`b4a694b1c5b6bf39bdb4cb4288b42cfc27268876`的run `35400612369`暴露Windows测试时限；对话修复提交`1c10865b96bf87c70732d5e7000db09357d3b6dc`的run `35403162431`又暴露测试异步close断言抢跑。两处测试同步修复收口于`51a1b48142b3193d9e0a10545d19f0b61c1a21f6`，最终run `35403562279`的macOS/Windows Tests、原生Opus加载与打包smoke全部PASS。
 - 配套EVA固件2.0.15源码已推送到`howtion0/otto`的`codex/otto-portable`，远端SHA为`c6addc6a35bf54c6c28f07fde53828cd73bce1f0`；2.0.11恢复点仍为`abb769f1d0f3d1c03fb7a6106bd7288f31c66a98`。
 - 此后每个阶段或补充检查点使用下一个 `testN.N` 编号。
 - 支线编号与产品版本分别记录，互不驱动。
@@ -30,14 +30,14 @@
 | Phase 1 Runtime与Message Bus | 已完成 |
 | Phase 2 SQLite | 已完成 |
 | Phase 3 Web/OTA/mDNS/Embedded MQTT Broker | 已完成 |
-| Phase 4 MQTT控制/TCP回退/WebSocket兼容 | 进行中；Phase 4A-4D软件门禁完成，Phase 4E两台EVA的2.0.6 OTA、MQTT控制、锁定改配、重复ID及Server/Broker重启恢复已通过；仅本支线正式CI待验收 |
+| Phase 4 MQTT控制/TCP回退/WebSocket兼容 | 进行中；Phase 4A-4D软件门禁完成，Phase 4E两台EVA的2.0.6 OTA、MQTT控制、锁定改配、重复ID及Server/Broker重启恢复已通过；当前`test1.0`跨平台CI通过，WebSocket真机Profile仍待验收 |
 | Phase 5 Opus/ASR/TTS | 进行中；火山ASR/TTS、Opus、MQTT加密UDP、独立partial/VAD/12秒硬上限三端点、2.0倍饱和增益和EVA1真实闭环已实现，EVA2、WebSocket真机与Windows实体矩阵未完成 |
 | Phase 6 WakeGate | 进行中；每轮2秒笑声门禁、循环问答、首次空final笑声恢复/连续第二次退出、仅非空partial取消的8秒静默、按钮/正式Web控制进出、瞬时状态查询重试和失败自恢复已实现 |
 | Phase 7 LLM/Dispatcher/动作 | 部分完成；DeepSeek流式`tools/tool_calls`、当前语音设备Schema、参数校验、TTS后串行工具和Dispatcher桥已实现；动作完成会等待本地音效排空，持久设备组与双机语音工具隔离未完成 |
 | Phase 8 集群/日志/容错 | 部分完成；WebUI多选、快捷/高级批量动作、stop、正式对话start/stop、逐设备结果和脱敏对话投影已实现，长期运行与完整集群策略未完成 |
 | Phase 9 Windows打包 | 未开始 |
 | Python业务实现 | Phase 1-4基座及Cloud/ASR/LLM/TTS、RobotToolBridge、DeviceAudioRouter、MQTT UDP、循环WakeGate和多设备Web控制台纵向链已实现 |
-| 自动测试 | 183通过；Ruff、mypy strict（38个源码文件）、Node语法、锁文件和diff检查通过；两次Windows CI失败均为测试等待边界，生产链无异常，现已同时加固查询时限与异步清理断言，最终CI待后续push |
+| 自动测试 | 183通过；Ruff、mypy strict（38个源码文件）、Node语法、锁文件和diff检查通过；两次Windows测试等待边界已加固，最终run `35403562279`的macOS/Windows及打包smoke全部PASS |
 | 硬件验证 | EVA1运行2.0.15，MQTT在线，输出音量100；五轮真实问答、语音前进工具、首次/连续空final策略、按钮退出及VAD噪声下8秒静默退出通过。用户确认当前“对话感觉没问题了”，2.0倍TTS、音量与流畅度主观PASS；EVA2当前在线但本次未触碰，实体Windows仍属于后续门禁 |
 
 ## 已完成
@@ -111,7 +111,7 @@
 - 用户在上述修复后真机链路上确认“对话感觉没问题了”，因此EVA1当前2.0倍TTS音量、可听性、卡顿和整体对话体验的主观验收记为PASS。
 - WebUI新增常用动作快捷按钮、显式目标与参数、动作目录自动verify和仅限loopback的无日志fragment授权引导。EVA1真实完成两次3步前进、一次左转和一次太空步；同设备重叠点击被Dispatcher正确串行。后续一次“点击前进无动作”经命令表和消息流确认根本没有进入正式8081；本机同时存在遗留8080入口且页面没有持久授权判别。现已关闭旧进程，并增加授权徽标、未授权控件锁定及常驻提交结果。
 - 修复后的8081页面再次真机操作已完成前进、抖动、弯腰和大笑，均沿`webui:batch`到达MQTT并completed；动作图遥测随动作切换并恢复。三步`swing`实际超过统一15秒完成时限而触发安全stop，生产完成门限已调整为30秒，ACK门限保持3秒。
-- 当前本地门禁为`183 passed`；锁文件、Ruff、mypy strict（38个源码文件）、Node语法和`git diff --check`通过。真实EVA1批量动作、对话start/stop、五轮问答、工具与退出清理通过。run `35400612369`暴露Windows 10 ms测试时限，run `35403162431`又暴露状态到达后异步close断言抢跑；两处均只收紧测试同步，不放宽生产逻辑，最终CI待后续提交。
+- 当前本地门禁为`183 passed`；锁文件、Ruff、mypy strict（38个源码文件）、Node语法和`git diff --check`通过。真实EVA1批量动作、对话start/stop、五轮问答、工具与退出清理通过。run `35400612369`与`35403162431`暴露的两个Windows测试同步边界均已修复且未放宽生产逻辑；最终run `35403562279`双平台及打包smoke全部PASS。
 
 ## 进行中
 
