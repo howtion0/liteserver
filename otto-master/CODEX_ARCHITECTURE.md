@@ -110,7 +110,7 @@ Gateway or Storage consumes output
 
 ### 5.3 Device MQTT Gateway
 
-计划文件：`gateways/device_mqtt.py`
+文件：`gateways/device_mqtt.py`
 
 职责：
 
@@ -118,6 +118,8 @@ Gateway or Storage consumes output
 - 将hello、heartbeat、动作ACK、状态和动作目录翻译为内部Message。
 - 将Dispatcher的单设备命令编码后发布到精确down Topic。
 - 维护MQTT连接重试、命令超时和协议级指标。
+
+当前实现边界：Phase 4A已实现安全上行、重连和协议指标；精确down发布、命令超时关联与Dispatcher接入留在后续Phase 4检查点。
 
 规则：
 
@@ -189,6 +191,8 @@ Session职责：
 - 保存该设备的短期音频缓冲和串行命令队列。
 - 确保同一机器人动作不发生无序并发。
 - 区分 `accepted`、`moving` 和 `completed`，不能把MQTT立即ACK当作动作完成。
+
+当前实现边界：Phase 4A的Session保存身份、连接状态、固件、动态IP、能力、动作状态和动作目录；短期音频、串行动作队列及completed关联尚未实现。
 
 推荐状态：
 
@@ -295,7 +299,7 @@ SQLite建议实体：
 - 阻塞SDK用统一线程池，不允许模块私建线程池。
 - 本地模型如果以后加入，使用独立进程池并作为扩展方案。
 - MQTT控制消息使用有界队列；连续音频不经过该控制队列。
-- 关闭顺序：注销mDNS/停止新发现 → 停止Web接入 → 等待Message Bus在途任务 → 断开MQTT Gateway → 关闭嵌入式Broker → 刷新数据库 → 关闭进程池。
+- 关闭顺序：注销mDNS/停止新发现 → 停止Web接入 → 断开MQTT Gateway并排空故障事件 → 停止Device Manager → 排空Message Bus → 关闭嵌入式Broker → 刷新数据库 → 关闭进程池。
 
 ## 14. 设备传输策略
 

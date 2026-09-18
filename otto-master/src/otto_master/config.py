@@ -41,6 +41,9 @@ class MqttConfig:
     credentials_path: str
     master_username: str
     master_password_env: str
+    heartbeat_stale_seconds: float
+    heartbeat_offline_seconds: float
+    gateway_reconnect_seconds: float
 
 
 @dataclass(frozen=True, slots=True)
@@ -302,6 +305,17 @@ def load_config(
     console_token_env = _string(server, "console_token_env", "server")
     master_password_env = _string(mqtt, "master_password_env", "mqtt")
     provisioning_token_env = _string(ota, "provisioning_token_env", "ota")
+    heartbeat_stale_seconds = _float(
+        mqtt, "heartbeat_stale_seconds", "mqtt", minimum=0.1
+    )
+    heartbeat_offline_seconds = _float(
+        mqtt, "heartbeat_offline_seconds", "mqtt", minimum=0.1
+    )
+    if heartbeat_offline_seconds <= heartbeat_stale_seconds:
+        raise ConfigError(
+            "mqtt.heartbeat_offline_seconds must be greater than "
+            "mqtt.heartbeat_stale_seconds"
+        )
 
     cloud_asr = _section(cloud, "asr")
     cloud_llm = _section(cloud, "llm")
@@ -325,6 +339,11 @@ def load_config(
             credentials_path=_string(mqtt, "credentials_path", "mqtt"),
             master_username=_string(mqtt, "master_username", "mqtt"),
             master_password_env=master_password_env,
+            heartbeat_stale_seconds=heartbeat_stale_seconds,
+            heartbeat_offline_seconds=heartbeat_offline_seconds,
+            gateway_reconnect_seconds=_float(
+                mqtt, "gateway_reconnect_seconds", "mqtt", minimum=0.1
+            ),
         ),
         runtime=RuntimeConfig(
             message_queue_size=_int(runtime, "message_queue_size", "runtime", minimum=1),

@@ -20,6 +20,9 @@ mqtt:
   credentials_path: .local-secrets/mqtt-credentials.json
   master_username: otto-master
   master_password_env: OTTO_MQTT_MASTER_PASSWORD
+  heartbeat_stale_seconds: 15
+  heartbeat_offline_seconds: 30
+  gateway_reconnect_seconds: 2
 
 runtime:
   message_queue_size: 1024

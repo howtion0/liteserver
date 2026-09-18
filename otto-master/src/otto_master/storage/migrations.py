@@ -97,7 +97,35 @@ CREATE TABLE IF NOT EXISTS settings (
 """
 
 
-MIGRATIONS: tuple[Migration, ...] = (Migration(version=1, sql=_MIGRATION_1),)
+_MIGRATION_2 = """
+ALTER TABLE devices ADD COLUMN mac TEXT;
+ALTER TABLE devices ADD COLUMN ip_address TEXT;
+ALTER TABLE devices ADD COLUMN firmware_version TEXT;
+ALTER TABLE devices ADD COLUMN last_hello_at TEXT;
+ALTER TABLE devices ADD COLUMN last_heartbeat_at TEXT;
+ALTER TABLE devices ADD COLUMN action_state TEXT NOT NULL DEFAULT 'unknown';
+ALTER TABLE devices ADD COLUMN current_action TEXT;
+ALTER TABLE devices ADD COLUMN enabled INTEGER NOT NULL DEFAULT 1;
+ALTER TABLE devices ADD COLUMN last_error TEXT;
+ALTER TABLE devices ADD COLUMN session_generation INTEGER NOT NULL DEFAULT 0;
+
+CREATE INDEX IF NOT EXISTS idx_devices_status ON devices (status);
+CREATE INDEX IF NOT EXISTS idx_devices_mac ON devices (mac);
+
+CREATE TABLE IF NOT EXISTS device_actions (
+    device_id TEXT NOT NULL REFERENCES devices(device_id) ON DELETE CASCADE,
+    action_name TEXT NOT NULL,
+    schema_json TEXT NOT NULL DEFAULT '{}',
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY (device_id, action_name)
+);
+"""
+
+
+MIGRATIONS: tuple[Migration, ...] = (
+    Migration(version=1, sql=_MIGRATION_1),
+    Migration(version=2, sql=_MIGRATION_2),
+)
 SCHEMA_VERSION = MIGRATIONS[-1].version
 
 

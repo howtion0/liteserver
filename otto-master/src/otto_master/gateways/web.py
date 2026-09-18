@@ -13,7 +13,7 @@ from datetime import UTC, datetime
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 from time import monotonic
-from typing import Any, Literal
+from typing import Any, Literal, Protocol
 from urllib.parse import urlsplit
 from uuid import uuid4
 
@@ -27,11 +27,22 @@ from starlette.responses import Response
 
 from ..config import AppConfig
 from ..message_bus import MessageBus
-from ..messages import Message
+from ..messages import JsonValue, Message
 from ..storage.database import Database, sanitize_payload
 from .mqtt_broker import EmbeddedMqttBroker, MqttBrokerError
 
 ComponentStatusProvider = Callable[[], Mapping[str, Mapping[str, Any]]]
+
+
+class DeviceReader(Protocol):
+    async def list_devices(self) -> list[dict[str, Any]]: ...
+
+    async def get_device(self, device_id: str) -> dict[str, Any] | None: ...
+
+    async def get_actions(
+        self,
+        device_id: str,
+    ) -> list[dict[str, JsonValue]] | None: ...
 
 
 def _now() -> str:
@@ -277,6 +288,7 @@ class WebContext:
     message_bus: MessageBus
     mqtt_broker: EmbeddedMqttBroker
     events: EventHub
+    devices: DeviceReader | None
     component_status: ComponentStatusProvider
     started_at: datetime
     started_monotonic: float
@@ -464,12 +476,24 @@ def create_app(context: WebContext) -> FastAPI:
         limit: int = Query(default=100, ge=1, le=500),
         offset: int = Query(default=0, ge=0),
     ) -> dict[str, Any]:
-        items = await context.database.list_devices(limit=limit, offset=offset)
-        return {"items": items, "limit": limit, "offset": offset}
+        if context.devices is None:
+            items = await context.database.list_devices(limit=limit, offset=offset)
+            return {"items": items, "limit": limit, "offset": offset}
+        all_items = await context.devices.list_devices()
+        return {
+            "items": all_items[offset : offset + limit],
+            "limit": limit,
+            "offset": offset,
+            "total": len(all_items),
+        }
 
     @app.get("/api/v1/devices/{device_id}")
     async def get_device(device_id: str) -> dict[str, Any]:
-        device = await context.database.fetch_device(device_id)
+        device = (
+            await context.devices.get_device(device_id)
+            if context.devices is not None
+            else await context.database.fetch_device(device_id)
+        )
         if device is None:
             raise ApiError(404, "device_not_found", "device does not exist")
         return device
@@ -486,8 +510,16 @@ def create_app(context: WebContext) -> FastAPI:
 
     @app.get("/api/v1/devices/{device_id}/actions")
     async def device_actions(device_id: str) -> dict[str, Any]:
-        del device_id
-        raise _component_not_ready("device action catalog")
+        if context.devices is not None:
+            actions = await context.devices.get_actions(device_id)
+            if actions is None:
+                raise ApiError(404, "device_not_found", "device does not exist")
+        else:
+            device = await context.database.fetch_device(device_id)
+            if device is None:
+                raise ApiError(404, "device_not_found", "device does not exist")
+            actions = await context.database.fetch_device_actions(device_id)
+        return {"device_id": device_id, "items": actions, "count": len(actions)}
 
     @app.post("/api/v1/devices/{device_id}/verify")
     async def verify_device(device_id: str, request: Request) -> dict[str, Any]:

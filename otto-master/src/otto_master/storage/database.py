@@ -6,7 +6,7 @@ import asyncio
 import json
 import logging
 import re
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -263,8 +263,10 @@ class Database:
             connection = self._require_connection()
             cursor = await connection.execute(
                 """
-                SELECT device_id, name, transport, status, capabilities_json,
-                       created_at, updated_at
+                SELECT device_id, name, mac, transport, status, ip_address,
+                       firmware_version, capabilities_json, last_hello_at,
+                       last_heartbeat_at, action_state, current_action, enabled,
+                       last_error, session_generation, created_at, updated_at
                 FROM devices
                 ORDER BY name COLLATE NOCASE, device_id
                 LIMIT ? OFFSET ?
@@ -282,8 +284,10 @@ class Database:
             connection = self._require_connection()
             cursor = await connection.execute(
                 """
-                SELECT device_id, name, transport, status, capabilities_json,
-                       created_at, updated_at
+                SELECT device_id, name, mac, transport, status, ip_address,
+                       firmware_version, capabilities_json, last_hello_at,
+                       last_heartbeat_at, action_state, current_action, enabled,
+                       last_error, session_generation, created_at, updated_at
                 FROM devices
                 WHERE device_id = ?
                 """,
@@ -294,6 +298,153 @@ class Database:
             finally:
                 await cursor.close()
         return self._device_row(row) if row is not None else None
+
+    async def upsert_device(
+        self,
+        *,
+        device_id: str,
+        name: str,
+        mac: str,
+        transport: str,
+        status: str,
+        capabilities: Mapping[str, JsonValue],
+        ip_address: str | None,
+        firmware_version: str | None,
+        last_hello_at: str | None,
+        last_heartbeat_at: str | None,
+        action_state: str,
+        current_action: str | None,
+        enabled: bool,
+        last_error: str | None,
+        session_generation: int,
+    ) -> None:
+        if not device_id.strip() or not name.strip() or not mac.strip():
+            raise ValueError("device identity and name must not be empty")
+        now = _now()
+        capabilities_json = _json(dict(capabilities))
+        async with self._operation_lock:
+            connection = self._require_connection()
+            await connection.execute(
+                """
+                INSERT INTO devices (
+                    device_id, name, mac, transport, status, ip_address,
+                    firmware_version, capabilities_json, last_hello_at,
+                    last_heartbeat_at, action_state, current_action, enabled,
+                    last_error, session_generation, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(device_id) DO UPDATE SET
+                    name = excluded.name,
+                    mac = excluded.mac,
+                    transport = excluded.transport,
+                    status = excluded.status,
+                    ip_address = excluded.ip_address,
+                    firmware_version = excluded.firmware_version,
+                    capabilities_json = excluded.capabilities_json,
+                    last_hello_at = excluded.last_hello_at,
+                    last_heartbeat_at = excluded.last_heartbeat_at,
+                    action_state = excluded.action_state,
+                    current_action = excluded.current_action,
+                    enabled = excluded.enabled,
+                    last_error = excluded.last_error,
+                    session_generation = excluded.session_generation,
+                    updated_at = excluded.updated_at
+                """,
+                (
+                    device_id,
+                    name,
+                    mac,
+                    transport,
+                    status,
+                    ip_address,
+                    firmware_version,
+                    capabilities_json,
+                    last_hello_at,
+                    last_heartbeat_at,
+                    action_state,
+                    current_action,
+                    int(enabled),
+                    last_error,
+                    session_generation,
+                    now,
+                    now,
+                ),
+            )
+            await connection.commit()
+
+    async def save_device_actions(
+        self,
+        device_id: str,
+        actions: Sequence[Mapping[str, JsonValue]],
+    ) -> None:
+        now = _now()
+        normalized: list[tuple[str, str, str]] = []
+        names: set[str] = set()
+        for action in actions:
+            name = action.get("name")
+            if not isinstance(name, str) or not name.strip():
+                raise ValueError("each device action must have a non-empty name")
+            if name in names:
+                raise ValueError(f"duplicate device action: {name}")
+            names.add(name)
+            normalized.append((device_id, name, _json(dict(action))))
+        async with self._operation_lock:
+            connection = self._require_connection()
+            await connection.execute(
+                "DELETE FROM device_actions WHERE device_id = ?",
+                (device_id,),
+            )
+            if normalized:
+                await connection.executemany(
+                    """
+                    INSERT INTO device_actions (device_id, action_name, schema_json, updated_at)
+                    VALUES (?, ?, ?, ?)
+                    """,
+                    [(*item, now) for item in normalized],
+                )
+            await connection.commit()
+
+    async def fetch_device_actions(self, device_id: str) -> list[dict[str, JsonValue]]:
+        async with self._operation_lock:
+            connection = self._require_connection()
+            cursor = await connection.execute(
+                """
+                SELECT schema_json
+                FROM device_actions
+                WHERE device_id = ?
+                ORDER BY action_name COLLATE NOCASE
+                """,
+                (device_id,),
+            )
+            try:
+                rows = await cursor.fetchall()
+            finally:
+                await cursor.close()
+        actions: list[dict[str, JsonValue]] = []
+        for row in rows:
+            decoded = json.loads(str(row["schema_json"]))
+            if not isinstance(decoded, dict):
+                raise DatabaseError("stored device action is not an object")
+            actions.append(decoded)
+        return actions
+
+    async def mark_active_devices_offline(self) -> int:
+        now = _now()
+        async with self._operation_lock:
+            connection = self._require_connection()
+            cursor = await connection.execute(
+                """
+                UPDATE devices
+                SET status = 'offline', action_state = 'unknown', current_action = NULL,
+                    updated_at = ?
+                WHERE status IN ('unknown', 'provisioning', 'connecting', 'online', 'stale', 'error')
+                  AND enabled = 1
+                """,
+                (now,),
+            )
+            changed = max(cursor.rowcount, 0)
+            await cursor.close()
+            await connection.commit()
+            return changed
 
     async def save_setting(self, key: str, value: JsonValue) -> None:
         if not key.strip():
@@ -329,10 +480,19 @@ class Database:
     def _device_row(row: aiosqlite.Row) -> dict[str, Any]:
         result = dict(row)
         result["capabilities"] = json.loads(str(result.pop("capabilities_json")))
+        result["enabled"] = bool(result["enabled"])
         return result
 
     async def _count_rows(self, table: str) -> int:
-        if table not in {"devices", "device_groups", "messages", "commands", "command_results", "settings"}:
+        if table not in {
+            "devices",
+            "device_groups",
+            "messages",
+            "commands",
+            "command_results",
+            "settings",
+            "device_actions",
+        }:
             raise ValueError("unsupported table")
         async with self._operation_lock:
             connection = self._require_connection()

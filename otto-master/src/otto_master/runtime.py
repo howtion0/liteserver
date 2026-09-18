@@ -14,6 +14,8 @@ from types import TracebackType
 from typing import Any, Self
 
 from .config import AppConfig
+from .devices.manager import DeviceManager
+from .gateways.device_mqtt import DeviceMqttGateway
 from .gateways.mdns import MdnsError, MdnsGateway
 from .gateways.mqtt_broker import EmbeddedMqttBroker
 from .gateways.web import EventHub, WebContext, WebGateway
@@ -48,6 +50,17 @@ class Runtime:
             public_host=config.discovery.hostname,
         )
         self.events = EventHub()
+        self.device_manager = DeviceManager(
+            self.database,
+            self.message_bus,
+            stale_seconds=config.mqtt.heartbeat_stale_seconds,
+            offline_seconds=config.mqtt.heartbeat_offline_seconds,
+        )
+        self.device_mqtt = DeviceMqttGateway(
+            config.mqtt,
+            self.mqtt_broker,
+            self.message_bus,
+        )
         self.mdns = MdnsGateway(
             config.discovery,
             http_port=config.server.port,
@@ -63,6 +76,7 @@ class Runtime:
                 message_bus=self.message_bus,
                 mqtt_broker=self.mqtt_broker,
                 events=self.events,
+                devices=self.device_manager,
                 component_status=self.component_status,
                 started_at=self._started_at,
                 started_monotonic=self._started_monotonic,
@@ -98,6 +112,8 @@ class Runtime:
                 self._message_logger
             )
             await self.mqtt_broker.start()
+            await self.device_manager.start()
+            await self.device_mqtt.start()
             await self.web.start()
             try:
                 await self.mdns.start()
@@ -157,6 +173,9 @@ class Runtime:
         try:
             await self._stop_with_timeout(self.mdns.shutdown(), "mDNS")
             await self._stop_with_timeout(self.web.shutdown(), "web gateway")
+            await self._stop_with_timeout(self.device_mqtt.shutdown(), "MQTT device gateway")
+            await self._stop_with_timeout(self.message_bus.drain(), "message bus drain")
+            await self._stop_with_timeout(self.device_manager.shutdown(), "device manager")
             await self._stop_with_timeout(self.message_bus.stop(), "message bus")
         finally:
             if self._storage_observer_id is not None:
@@ -193,6 +212,13 @@ class Runtime:
                 "state": "running" if self.database.is_open else "stopped",
             },
             "mqtt": self.mqtt_broker.status(),
+            "mqtt_gateway": self.device_mqtt.status(),
+            "device_manager": {
+                "enabled": True,
+                "healthy": self.device_manager.running,
+                "state": "running" if self.device_manager.running else "stopped",
+                "devices": self.device_manager.device_count,
+            },
             "web": self.web.status(),
             "mdns": self.mdns.status(),
             "ota": {
@@ -215,6 +241,9 @@ class Runtime:
         try:
             await self._stop_with_timeout(self.mdns.shutdown(), "mDNS")
             await self._stop_with_timeout(self.web.shutdown(), "web gateway")
+            await self._stop_with_timeout(self.device_mqtt.shutdown(), "MQTT device gateway")
+            await self._stop_with_timeout(self.message_bus.drain(), "message bus drain")
+            await self._stop_with_timeout(self.device_manager.shutdown(), "device manager")
             await self._stop_with_timeout(self.message_bus.stop(), "message bus")
             if self._storage_observer_id is not None:
                 await self.message_bus.unsubscribe_observer(self._storage_observer_id)

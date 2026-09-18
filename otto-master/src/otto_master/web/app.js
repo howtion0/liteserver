@@ -88,7 +88,7 @@ function renderDevices(data) {
     const row = document.createElement("tr");
     const cell = document.createElement("td");
     cell.colSpan = 4;
-    cell.textContent = "暂无设备；设备会话将在 Phase 4 接入。";
+    cell.textContent = "暂无已上报 hello 和 heartbeat 的设备。";
     row.append(cell);
     table.append(row);
     return;

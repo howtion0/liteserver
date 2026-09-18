@@ -33,6 +33,9 @@ def _config(port: int) -> MqttConfig:
         credentials_path="credentials.json",
         master_username="otto-master",
         master_password_env="OTTO_MQTT_MASTER_PASSWORD",
+        heartbeat_stale_seconds=15,
+        heartbeat_offline_seconds=30,
+        gateway_reconnect_seconds=2,
     )
 
 

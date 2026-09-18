@@ -1,1 +1,1 @@
-# Phase 0 gateway package placeholder. No implementation yet.
+"""Network and control-plane gateway adapters."""
