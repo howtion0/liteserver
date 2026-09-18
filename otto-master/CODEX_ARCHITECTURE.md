@@ -119,7 +119,7 @@ Gateway or Storage consumes output
 - 将Dispatcher的单设备命令编码后发布到精确down Topic。
 - 维护MQTT连接重试、命令超时和协议级指标。
 
-当前实现边界：Phase 4A已实现安全上行、重连和协议指标；Phase 4B已实现白名单只读查询的精确down发布和结果指标。动作/stop编码与Dispatcher接入留在后续Phase 4检查点。
+当前实现边界：Phase 4A已实现安全上行、重连和协议指标；Phase 4B已实现白名单只读查询；Phase 4C已实现Dispatcher专用动作/stop命令编码、精确down发布、ACK/状态映射和非retain边界。当前仅fake设备验收，不代表固件或真机已通过。
 
 规则：
 
@@ -188,11 +188,11 @@ Manager职责：
 Session职责：
 
 - 保存单台设备的连接引用、协议能力和状态机。
-- 保存该设备的短期音频缓冲和串行命令队列。
-- 确保同一机器人动作不发生无序并发。
+- 保存该设备的短期音频缓冲；串行命令队列由Dispatcher按device_id持有。
+- 与Dispatcher配合，确保同一机器人动作不发生无序并发。
 - 区分 `accepted`、`moving` 和 `completed`，不能把MQTT立即ACK当作动作完成。
 
-当前实现边界：Phase 4A的Session保存身份、连接状态、固件、动态IP、能力、动作状态和动作目录；短期音频、串行动作队列及completed关联尚未实现。
+当前实现边界：Phase 4A的Session保存身份、连接状态、固件、动态IP、能力、动作状态和动作目录；Phase 4C的Dispatcher按device_id提供串行动作队列并关联completed。Session内的短期音频缓冲尚未实现。
 
 ### 6.1 Device Verifier
 
@@ -248,6 +248,8 @@ offline → sleeping → wake_check → ack_playing
 - 解析自然语言。
 - 绕过Device Manager直接访问Socket。
 - 将空目标解释成全体机器人。
+
+当前实现边界：Phase 4C已实现动作目录/参数/能力/在线预检、每设备有界串行worker、跨设备并行、stop抢占、重复command ID幂等、超时安全stop和集群stop拆分。`CommandRepository`持久化命令及每次转移；重启将未完成命令失败关闭，不重放动作。分组/普通动作广播和多传输选择留待后续检查点。
 
 ## 9. Audio / Opus
 

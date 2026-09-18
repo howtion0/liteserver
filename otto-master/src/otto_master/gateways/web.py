@@ -13,7 +13,7 @@ from datetime import UTC, datetime
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 from time import monotonic
-from typing import Any, Literal, Protocol
+from typing import Any, Literal, Protocol, cast
 from urllib.parse import urlsplit
 from uuid import uuid4
 
@@ -26,6 +26,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from starlette.responses import Response
 
 from ..config import AppConfig
+from ..dispatch.commands import DispatchRequestError
 from ..message_bus import MessageBus
 from ..messages import JsonValue, Message
 from ..storage.database import Database, sanitize_payload
@@ -47,6 +48,33 @@ class DeviceReader(Protocol):
 
 class DeviceVerificationReader(Protocol):
     async def verify(self, device_id: str) -> dict[str, Any] | None: ...
+
+
+class CommandDispatchReader(Protocol):
+    async def submit_action(
+        self,
+        *,
+        device_id: str,
+        action: str,
+        parameters: Mapping[str, JsonValue] | None,
+        confirmation: bool,
+        source: str = "webui",
+        command_id: str | None = None,
+        correlation_id: str | None = None,
+    ) -> dict[str, Any]: ...
+
+    async def submit_stop(
+        self,
+        *,
+        device_id: str,
+        source: str = "webui",
+        command_id: str | None = None,
+        correlation_id: str | None = None,
+    ) -> dict[str, Any]: ...
+
+    async def stop_cluster(self, *, source: str = "webui") -> dict[str, Any]: ...
+
+    async def get_command(self, command_id: str) -> dict[str, Any] | None: ...
 
 
 def _now() -> str:
@@ -86,7 +114,7 @@ class ActionCommand(BaseModel):
 
     device_id: str = Field(min_length=12, max_length=17)
     action: str = Field(min_length=1, max_length=80)
-    parameters: dict[str, Any] = Field(default_factory=dict)
+    parameters: dict[str, Any] = Field(default_factory=dict, max_length=32)
     confirmation: bool = False
 
 
@@ -294,6 +322,7 @@ class WebContext:
     events: EventHub
     devices: DeviceReader | None
     verifier: DeviceVerificationReader | None
+    dispatcher: CommandDispatchReader | None
     component_status: ComponentStatusProvider
     started_at: datetime
     started_monotonic: float
@@ -377,6 +406,36 @@ def _require_provisioning_access(request: Request, config: AppConfig) -> None:
 
 def _component_not_ready(name: str) -> ApiError:
     return ApiError(503, "component_not_ready", f"{name} is scheduled for a later phase")
+
+
+def _dispatch_api_error(exc: DispatchRequestError) -> ApiError:
+    if exc.code == "device_not_found":
+        status_code = 404
+    elif exc.code in {
+        "invalid_action",
+        "invalid_confirmation",
+        "invalid_command",
+        "invalid_device_id",
+        "invalid_parameters",
+        "target_mismatch",
+        "action_not_supported",
+        "confirmation_required",
+    }:
+        status_code = 422
+    elif exc.code in {
+        "capability_missing",
+        "command_conflict",
+        "device_disabled",
+        "device_not_online",
+        "device_queue_full",
+        "device_state_unsafe",
+        "duplicate_submission",
+        "transport_unavailable",
+    }:
+        status_code = 409
+    else:
+        status_code = 503
+    return ApiError(status_code, exc.code, exc.message)
 
 
 def create_app(context: WebContext) -> FastAPI:
@@ -537,26 +596,55 @@ def create_app(context: WebContext) -> FastAPI:
         return report
 
     @app.post("/api/v1/commands/action")
-    async def command_action(payload: ActionCommand, request: Request) -> dict[str, Any]:
-        del payload
+    async def command_action(payload: ActionCommand, request: Request) -> JSONResponse:
         _require_console_access(request, context.config)
-        raise _component_not_ready("dispatcher")
+        if context.dispatcher is None:
+            raise _component_not_ready("dispatcher")
+        try:
+            command = await context.dispatcher.submit_action(
+                device_id=payload.device_id,
+                action=payload.action,
+                parameters=cast(Mapping[str, JsonValue], payload.parameters),
+                confirmation=payload.confirmation,
+                correlation_id=_correlation_id(request),
+            )
+        except DispatchRequestError as exc:
+            raise _dispatch_api_error(exc) from exc
+        return JSONResponse(status_code=202, content=command)
 
     @app.get("/api/v1/commands/{command_id}")
     async def get_command(command_id: str) -> dict[str, Any]:
-        del command_id
-        raise _component_not_ready("command repository")
+        if context.dispatcher is None:
+            raise _component_not_ready("command repository")
+        command = await context.dispatcher.get_command(command_id)
+        if command is None:
+            raise ApiError(404, "command_not_found", "command does not exist")
+        return command
 
     @app.post("/api/v1/devices/{device_id}/stop")
-    async def stop_device(device_id: str, request: Request) -> dict[str, Any]:
-        del device_id
+    async def stop_device(device_id: str, request: Request) -> JSONResponse:
         _require_console_access(request, context.config)
-        raise _component_not_ready("dispatcher")
+        if context.dispatcher is None:
+            raise _component_not_ready("dispatcher")
+        try:
+            command = await context.dispatcher.submit_stop(
+                device_id=device_id,
+                correlation_id=_correlation_id(request),
+            )
+        except DispatchRequestError as exc:
+            raise _dispatch_api_error(exc) from exc
+        return JSONResponse(status_code=202, content=command)
 
     @app.post("/api/v1/cluster/stop")
-    async def stop_cluster(request: Request) -> dict[str, Any]:
+    async def stop_cluster(request: Request) -> JSONResponse:
         _require_console_access(request, context.config)
-        raise _component_not_ready("dispatcher")
+        if context.dispatcher is None:
+            raise _component_not_ready("dispatcher")
+        try:
+            result = await context.dispatcher.stop_cluster()
+        except DispatchRequestError as exc:
+            raise _dispatch_api_error(exc) from exc
+        return JSONResponse(status_code=202, content=result)
 
     @app.get("/api/v1/events")
     async def list_events(

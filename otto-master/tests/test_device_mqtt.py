@@ -67,10 +67,10 @@ def test_translates_read_only_device_protocol_messages() -> None:
 @pytest.mark.parametrize(
     ("external_type", "ok", "expected_topic"),
     [
-        ("otto_action_ack", True, "robot.action.dispatched"),
+        ("otto_action_ack", True, "robot.action.accepted"),
         ("otto_action_ack", False, "robot.action.failed"),
-        ("otto_stop_ack", True, "robot.stop.completed"),
-        ("otto_stop_ack", False, "robot.action.failed"),
+        ("otto_stop_ack", True, "robot.stop.accepted"),
+        ("otto_stop_ack", False, "robot.stop.failed"),
     ],
 )
 def test_translates_ack_without_claiming_action_completion(
@@ -84,6 +84,37 @@ def test_translates_ack_without_claiming_action_completion(
     assert message.topic == expected_topic
     assert message.correlation_id == "cmd-1"
     assert message.payload["accepted"] is ok
+
+
+def test_ack_runtime_state_is_a_separate_correlated_state_fact() -> None:
+    messages = _translate(
+        {
+            "type": "otto_action_ack",
+            "id": "cmd-1",
+            "ok": True,
+            "action": "swing",
+            "runtime": {"otto": {"action": {"state": "moving", "name": "swing"}}},
+        }
+    )
+
+    assert [message.topic for message in messages] == [
+        "robot.action.accepted",
+        "device.state.received",
+    ]
+    assert all(message.correlation_id == "cmd-1" for message in messages)
+    assert messages[1].payload["action_state"] == "moving"
+
+    with pytest.raises(DeviceMessageError, match="known action state"):
+        _translate(
+            {
+                "type": "otto_action_ack",
+                "id": "cmd-2",
+                "ok": True,
+                "runtime": {
+                    "otto": {"action": {"state": "teleporting", "name": "swing"}}
+                },
+            }
+        )
 
 
 @pytest.mark.parametrize(
@@ -163,6 +194,66 @@ def test_encodes_only_allowlisted_read_only_queries_to_exact_down_topic() -> Non
     assert json.loads(encode_device_command(actions).payload)["type"] == "otto_actions"
 
 
+def test_encodes_dispatcher_action_and_stop_with_command_id() -> None:
+    action = Message.create(
+        topic="device.action.execute.requested",
+        kind=MessageKind.COMMAND,
+        source="dispatcher",
+        target="device:aabbccddeeff",
+        correlation_id="command-1",
+        payload={
+            "device_id": "aabbccddeeff",
+            "command_id": "command-1",
+            "action": "swing",
+            "parameters": {"steps": 2, "speed": 1000},
+        },
+    )
+    stop = Message.create(
+        topic="device.stop.execute.requested",
+        kind=MessageKind.COMMAND,
+        source="dispatcher",
+        target="device:aabbccddeeff",
+        correlation_id="stop-1",
+        payload={"device_id": "aabbccddeeff", "command_id": "stop-1"},
+    )
+
+    encoded_action = encode_device_command(action)
+    encoded_stop = encode_device_command(stop)
+
+    assert encoded_action.topic == "otto/v1/devices/aabbccddeeff/down"
+    assert encoded_action.external_id == "command-1"
+    assert json.loads(encoded_action.payload) == {
+        "type": "otto_action",
+        "id": "command-1",
+        "action": "swing",
+        "steps": 2,
+        "speed": 1000,
+    }
+    assert json.loads(encoded_stop.payload) == {"type": "stop", "id": "stop-1"}
+
+
+def test_action_encoder_rejects_reserved_or_normalized_duplicate_parameters() -> None:
+    def action(parameters: dict[str, object]) -> Message:
+        return Message.create(
+            topic="device.action.execute.requested",
+            kind=MessageKind.COMMAND,
+            source="dispatcher",
+            target="device:aabbccddeeff",
+            correlation_id="command-1",
+            payload={
+                "device_id": "aabbccddeeff",
+                "command_id": "command-1",
+                "action": "swing",
+                "parameters": parameters,
+            },
+        )
+
+    with pytest.raises(DeviceMessageError, match="invalid parameter name"):
+        encode_device_command(action({" action ": "walk"}))
+    with pytest.raises(DeviceMessageError, match="invalid parameter name"):
+        encode_device_command(action({"steps": 1, " steps ": 2}))
+
+
 @pytest.mark.parametrize(
     "message",
     [
@@ -189,7 +280,7 @@ def test_encodes_only_allowlisted_read_only_queries_to_exact_down_topic() -> Non
         ),
     ],
 )
-def test_outbound_encoder_rejects_actions_cross_target_and_non_commands(
+def test_outbound_encoder_rejects_unowned_actions_cross_target_and_non_commands(
     message: Message,
 ) -> None:
     with pytest.raises(DeviceMessageError):

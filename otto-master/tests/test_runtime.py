@@ -95,6 +95,169 @@ async def _respond_to_read_only_verification(
     return received
 
 
+async def _respond_to_action_and_stop(
+    client: MQTTClient,
+    provisioning: dict[str, object],
+) -> list[dict[str, object]]:
+    received: list[dict[str, object]] = []
+    expected = ["otto_action", "stop"]
+    action_state = "idle"
+    current_action: str | None = None
+    while expected:
+        packet = await client.deliver_message(timeout_duration=2)
+        assert packet is not None
+        assert packet.qos == 0
+        assert packet.retain is False
+        payload = json.loads(bytes(packet.data))
+        assert isinstance(payload["id"], str)
+        if payload["type"] == "otto_query":
+            await _publish_device(
+                client,
+                provisioning,
+                {
+                    "type": "otto_state",
+                    "id": payload["id"],
+                    "action_state": action_state,
+                    "current_action": current_action,
+                },
+            )
+            continue
+        assert payload["type"] == expected.pop(0)
+        received.append(payload)
+        if payload["type"] == "otto_action":
+            assert payload["action"] == "swing"
+            assert payload["steps"] == 2
+            action_state = "moving"
+            current_action = "swing"
+            await _publish_device(
+                client,
+                provisioning,
+                {
+                    "type": "otto_action_ack",
+                    "id": payload["id"],
+                    "ok": True,
+                    "action": "swing",
+                    "runtime": {
+                        "otto": {"action": {"state": "moving", "name": "swing"}}
+                    },
+                },
+            )
+            await asyncio.sleep(0.02)
+            action_state = "idle"
+            current_action = None
+            await _publish_device(
+                client,
+                provisioning,
+                {
+                    "type": "otto_state",
+                    "id": payload["id"],
+                    "action_state": "idle",
+                    "current_action": None,
+                },
+            )
+        else:
+            action_state = "idle"
+            current_action = "idle"
+            await _publish_device(
+                client,
+                provisioning,
+                {
+                    "type": "otto_stop_ack",
+                    "id": payload["id"],
+                    "ok": True,
+                    "runtime": {
+                        "otto": {"action": {"state": "idle", "name": "idle"}}
+                    },
+                },
+            )
+    return received
+
+
+async def _respond_to_one_action(
+    client: MQTTClient,
+    provisioning: dict[str, object],
+) -> dict[str, object]:
+    while True:
+        packet = await client.deliver_message(timeout_duration=2)
+        assert packet is not None
+        assert packet.qos == 0
+        assert packet.retain is False
+        payload = json.loads(bytes(packet.data))
+        if payload["type"] == "otto_query":
+            await _publish_device(
+                client,
+                provisioning,
+                {
+                    "type": "otto_state",
+                    "id": payload["id"],
+                    "action_state": "idle",
+                    "current_action": None,
+                },
+            )
+            continue
+        assert payload["type"] == "otto_action"
+        await _publish_device(
+            client,
+            provisioning,
+            {
+                "type": "otto_action_ack",
+                "id": payload["id"],
+                "ok": True,
+                "action": payload["action"],
+                "runtime": {
+                    "otto": {
+                        "action": {"state": "moving", "name": payload["action"]}
+                    }
+                },
+            },
+        )
+        await _publish_device(
+            client,
+            provisioning,
+            {
+                "type": "otto_state",
+                "id": payload["id"],
+                "action_state": "idle",
+                "current_action": None,
+            },
+        )
+        completed = payload
+        while True:
+            try:
+                trailing = await client.deliver_message(timeout_duration=0.1)
+            except TimeoutError:
+                return completed
+            assert trailing is not None
+            assert trailing.qos == 0
+            assert trailing.retain is False
+            trailing_payload = json.loads(bytes(trailing.data))
+            assert trailing_payload["type"] == "otto_query", "duplicate action was published"
+            await _publish_device(
+                client,
+                provisioning,
+                {
+                    "type": "otto_state",
+                    "id": trailing_payload["id"],
+                    "action_state": "idle",
+                    "current_action": None,
+                },
+            )
+
+
+async def _wait_for_command(
+    client: httpx.AsyncClient,
+    command_id: str,
+    status: str,
+) -> dict[str, object]:
+    deadline = asyncio.get_running_loop().time() + 3
+    while asyncio.get_running_loop().time() < deadline:
+        response = await client.get(f"/api/v1/commands/{command_id}")
+        if response.status_code == 200 and response.json()["status"] == status:
+            return response.json()
+        await asyncio.sleep(0.02)
+    raise AssertionError(f"command {command_id} did not reach {status}")
+
+
 async def _wait_for_two_online(client: httpx.AsyncClient) -> list[dict[str, object]]:
     loop = asyncio.get_running_loop()
     deadline = loop.time() + 5
@@ -305,10 +468,17 @@ async def test_runtime_two_fake_devices_read_only_mqtt_integration(tmp_path: Pat
             host="127.0.0.1",
             port=mqtt_port,
             credentials_path=".local-secrets/runtime-mqtt.json",
-            heartbeat_stale_seconds=0.5,
-            heartbeat_offline_seconds=1.0,
+            heartbeat_stale_seconds=2.0,
+            heartbeat_offline_seconds=4.0,
             gateway_reconnect_seconds=0.1,
             query_timeout_seconds=0.2,
+        ),
+        dispatch=replace(
+            loaded.dispatch,
+            queue_size_per_device=4,
+            ack_timeout_seconds=0.3,
+            completion_timeout_seconds=0.8,
+            state_query_interval_seconds=0.05,
         ),
         discovery=replace(loaded.discovery, enabled=False),
         secrets=RuntimeSecrets(
@@ -351,7 +521,7 @@ async def test_runtime_two_fake_devices_read_only_mqtt_integration(tmp_path: Pat
                         "mac": mac,
                         "firmware_version": "2.0.5-test",
                         "ip_address": f"192.0.2.{10 + index}",
-                        "capabilities": {"actions": True, "state": True},
+                        "capabilities": {"actions": True, "state": True, "stop": True},
                     },
                 )
                 await _publish_device(mqtt_client, item, {"type": "heartbeat"})
@@ -430,6 +600,71 @@ async def test_runtime_two_fake_devices_read_only_mqtt_integration(tmp_path: Pat
             with pytest.raises(TimeoutError):
                 await fake_clients[1].deliver_message(timeout_duration=0.1)
 
+            action_responder = asyncio.create_task(
+                _respond_to_action_and_stop(fake_clients[0], provisioned[0])
+            )
+            action_response = await client.post(
+                "/api/v1/commands/action",
+                json={
+                    "device_id": "aabbccddee01",
+                    "action": "swing",
+                    "parameters": {"steps": 2},
+                    "confirmation": True,
+                },
+            )
+            assert action_response.status_code == 202
+            action_id = action_response.json()["command_id"]
+            completed_action = await _wait_for_command(client, action_id, "completed")
+            assert [item["status"] for item in completed_action["history"]] == [
+                "requested",
+                "published",
+                "accepted",
+                "moving",
+                "completed",
+            ]
+
+            stop_response = await client.post("/api/v1/devices/aabbccddee01/stop")
+            assert stop_response.status_code == 202
+            stop_id = stop_response.json()["command_id"]
+            completed_stop = await _wait_for_command(client, stop_id, "completed")
+            assert [item["status"] for item in completed_stop["history"]] == [
+                "requested",
+                "published",
+                "accepted",
+                "completed",
+            ]
+            action_down = await action_responder
+            assert [item["type"] for item in action_down] == ["otto_action", "stop"]
+            assert action_down[0]["id"] == action_id
+            assert action_down[1]["id"] == stop_id
+            with pytest.raises(TimeoutError):
+                await fake_clients[1].deliver_message(timeout_duration=0.1)
+
+            duplicate_responder = asyncio.create_task(
+                _respond_to_one_action(fake_clients[0], provisioned[0])
+            )
+            duplicate = Message.create(
+                topic="robot.action.requested",
+                kind=MessageKind.COMMAND,
+                source="runtime-test",
+                target="device:aabbccddee01",
+                message_id="duplicate-command-id",
+                payload={
+                    "device_id": "aabbccddee01",
+                    "action": "swing",
+                    "parameters": {"steps": 2},
+                    "confirmation": True,
+                },
+            )
+            await runtime.message_bus.publish(duplicate)
+            await runtime.message_bus.publish(duplicate)
+            duplicate_down = await duplicate_responder
+            assert duplicate_down["id"] == "duplicate-command-id"
+            await _wait_for_command(client, "duplicate-command-id", "completed")
+            with pytest.raises(TimeoutError):
+                await fake_clients[0].deliver_message(timeout_duration=0.1)
+
+            await _publish_device(fake_clients[1], provisioned[1], {"type": "heartbeat"})
             timed_out = await client.post("/api/v1/devices/aabbccddee02/verify")
             assert timed_out.status_code == 200
             assert timed_out.json()["passed"] is False
@@ -440,6 +675,8 @@ async def test_runtime_two_fake_devices_read_only_mqtt_integration(tmp_path: Pat
             event_topics = {item["event"]["topic"] for item in events.json()["items"]}
             assert "device.command.published" in event_topics
             assert "device.verification.completed" in event_topics
+            assert "robot.action.accepted" in event_topics
+            assert "robot.stop.accepted" in event_topics
 
             await runtime.device_mqtt.shutdown()
             await runtime.message_bus.drain()
@@ -462,5 +699,12 @@ async def test_runtime_two_fake_devices_read_only_mqtt_integration(tmp_path: Pat
         assert {item["status"] for item in persisted} == {"offline"}
         assert len(await database.fetch_device_actions("aabbccddee01")) == 2
         assert len(await database.fetch_device_actions("aabbccddee02")) == 2
+        persisted_action = await database.fetch_command_record(action_id)
+        persisted_stop = await database.fetch_command_record(stop_id)
+        persisted_duplicate = await database.fetch_command_record("duplicate-command-id")
+        assert persisted_action is not None and persisted_action["status"] == "completed"
+        assert persisted_stop is not None and persisted_stop["status"] == "completed"
+        assert persisted_duplicate is not None and persisted_duplicate["status"] == "completed"
+        assert len(await database.fetch_command_results(action_id)) == 5
     finally:
         await database.close()

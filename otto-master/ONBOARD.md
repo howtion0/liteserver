@@ -49,14 +49,14 @@ mDNS / OTA     ───┘                                  ├─ WakeGate
 | Phase 1 Runtime与Message Bus | 已完成 |
 | Phase 2 SQLite | 已完成 |
 | Phase 3 网络控制面 | 已完成；macOS/Windows CI与两平台PyInstaller smoke通过 |
-| Phase 4 MQTT与Device Session | 进行中；Phase 4B fake设备只读双向验证本地与macOS/Windows探针通过 |
-| Python业务代码 | Phase 1-4B已实现；动作/stop队列、兼容传输和云服务未接入 |
+| Phase 4 MQTT与Device Session | 进行中；Phase 4C fake设备动作/stop闭环本地与跨平台探针通过，正式SHA待复验 |
+| Python业务代码 | Phase 1-4C已实现；TCP/WebSocket兼容、固件和云服务未接入 |
 | WebUI | P0状态/实时设备/事件/设置/OTA骨架已实现 |
 | SQLite数据库 | 运行时自动创建并迁移 |
 | 固件文件 | 未放入 |
-| 测试 | 本机53个自动测试通过；Phase 4B macOS/Windows探针矩阵通过 |
+| 测试 | 本机71个自动测试通过；Phase 4C macOS/Windows探针通过，正式SHA待复验 |
 
-当前工程可启动本地控制面、Broker、MQTT Gateway和Device Manager，并对fake/兼容设备执行不移动机器人的状态/动作目录连接验证；动作验证、命令闭环和真机MQTT仍未实现，相关API返回“组件未就绪”不代表对应业务已经完成。
+当前工程可启动本地控制面、Broker、MQTT Gateway、Device Manager和Dispatcher，并对fake/兼容设备执行只读连接验证、受保护动作/stop、命令状态查询和集群stop拆分。这些结果只来自fake设备；固件2.0.5的MQTT stop/去重改造与EVA真机验收尚未完成。
 
 ## 5. 文档索引
 

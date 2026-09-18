@@ -100,7 +100,7 @@ async def test_migrations_are_idempotent(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_existing_phase2_database_migrates_from_v1_to_v2(tmp_path: Path) -> None:
+async def test_existing_phase2_database_migrates_from_v1_to_latest(tmp_path: Path) -> None:
     path = tmp_path / "otto.db"
     connection = sqlite3.connect(path)
     try:
@@ -132,7 +132,7 @@ async def test_existing_phase2_database_migrates_from_v1_to_v2(tmp_path: Path) -
 
     database = await Database.open(path)
     try:
-        assert await database.schema_version() == 2
+        assert await database.schema_version() == SCHEMA_VERSION
         migrated = await database.fetch_device("aabbccddeeff")
         assert migrated is not None
         assert migrated["mac"] is None

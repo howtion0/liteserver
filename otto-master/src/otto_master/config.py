@@ -48,6 +48,14 @@ class MqttConfig:
 
 
 @dataclass(frozen=True, slots=True)
+class DispatchConfig:
+    queue_size_per_device: int
+    ack_timeout_seconds: float
+    completion_timeout_seconds: float
+    state_query_interval_seconds: float
+
+
+@dataclass(frozen=True, slots=True)
 class RuntimeConfig:
     message_queue_size: int
     worker_threads: int
@@ -133,6 +141,7 @@ class AppConfig:
     project: ProjectConfig
     server: ServerConfig
     mqtt: MqttConfig
+    dispatch: DispatchConfig
     runtime: RuntimeConfig
     discovery: DiscoveryConfig
     database: DatabaseConfig
@@ -294,6 +303,7 @@ def load_config(
     project = _section(root, "project")
     server = _section(root, "server")
     mqtt = _section(root, "mqtt")
+    dispatch = _section(root, "dispatch")
     runtime = _section(root, "runtime")
     discovery = _section(root, "discovery")
     database = _section(root, "database")
@@ -347,6 +357,20 @@ def load_config(
             ),
             query_timeout_seconds=_float(
                 mqtt, "query_timeout_seconds", "mqtt", minimum=0.1
+            ),
+        ),
+        dispatch=DispatchConfig(
+            queue_size_per_device=_int(
+                dispatch, "queue_size_per_device", "dispatch", minimum=1
+            ),
+            ack_timeout_seconds=_float(
+                dispatch, "ack_timeout_seconds", "dispatch", minimum=0.1
+            ),
+            completion_timeout_seconds=_float(
+                dispatch, "completion_timeout_seconds", "dispatch", minimum=0.1
+            ),
+            state_query_interval_seconds=_float(
+                dispatch, "state_query_interval_seconds", "dispatch", minimum=0.05
             ),
         ),
         runtime=RuntimeConfig(

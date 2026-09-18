@@ -58,6 +58,8 @@ device.transport.changed
 device.actions.catalog.received
 device.state.query.requested
 device.actions.query.requested
+device.action.execute.requested
+device.stop.execute.requested
 device.command.published
 device.command.failed
 device.verification.requested
@@ -72,11 +74,13 @@ voice.command.window.opened
 tts.playback.requested
 tts.playback.finished
 robot.action.requested
-robot.action.dispatched
+robot.action.accepted
 robot.action.completed
 robot.action.failed
 robot.stop.requested
+robot.stop.accepted
 robot.stop.completed
+robot.stop.failed
 cluster.broadcast.requested
 storage.write.requested
 system.shutdown.requested
@@ -147,13 +151,15 @@ MQTT外部Topic和JSON合同见 `docs/MQTT_CONTROL_CONTRACT.md`。Gateway转换�
 - `hello` → `device.connected`或`device.transport.changed`。
 - `heartbeat` → `device.heartbeat.received`。
 - `otto_actions` → `device.actions.catalog.received`。
-- `otto_action_ack(ok=true)` → `robot.action.dispatched`，只表示accepted。
+- `otto_action_ack(ok=true)` → `robot.action.accepted`，只表示accepted。
 - 后续状态为moving → 设备Session更新执行中状态。
 - 对应命令状态回到idle → `robot.action.completed`。
 - `otto_action_ack(ok=false)`、超时或断线 → `robot.action.failed`。
 - `otto_stop_ack(ok=true)`且状态为idle → `robot.stop.completed`。
 - MQTT响应的外部 `id` 映射到内部correlation链；重复外部ID不能产生第二次执行。
 
-Phase 4A实现说明：Gateway已生成`device.connected`、`device.heartbeat.received`、`device.state.received`、`device.actions.catalog.received`及ACK/error结果；Manager生成`device.state.changed`快照。外部ID到内部命令仓库的完整关联和重复执行保护尚未实现。
+Phase 4A实现说明：Gateway已生成`device.connected`、`device.heartbeat.received`、`device.state.received`、`device.actions.catalog.received`及ACK/error结果；Manager生成`device.state.changed`快照。该检查点当时尚未实现外部ID到内部命令仓库的完整关联和重复执行保护，已由Phase 4C补齐。
 
-Phase 4B实现说明：Verifier发布`device.state.query.requested`和`device.actions.query.requested`；Gateway只将这两个白名单命令编码为精确设备down消息，并生成`device.command.published|failed`。设备响应的外部`id`进入内部`correlation_id`，Verifier再同时核对响应topic和target。动作命令的完整持久关联仍未实现。
+Phase 4B实现说明：Verifier发布`device.state.query.requested`和`device.actions.query.requested`；Gateway只将这两个白名单命令编码为精确设备down消息，并生成`device.command.published|failed`。设备响应的外部`id`进入内部`correlation_id`，Verifier再同时核对响应topic和target。该检查点当时尚未实现动作命令的完整持久关联，已由Phase 4C补齐。
+
+Phase 4C实现说明：Dispatcher消费`robot.action.requested|robot.stop.requested`，持久命令后发布`device.action.execute.requested|device.stop.execute.requested`。Gateway只对这两个专用topic编码外部动作/stop，且外部`id`必须等于持久command ID。ACK映射为`robot.action.accepted|robot.stop.accepted`，只有同关联链的moving与idle事实才推进终态。重复ID同载荷幂等，冲突载荷拒绝。

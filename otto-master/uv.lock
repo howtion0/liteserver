@@ -684,7 +684,7 @@ wheels = [
 
 [[package]]
 name = "otto-master"
-version = "0.4.1"
+version = "0.4.2"
 source = { editable = "." }
 dependencies = [
     { name = "aiosqlite" },
