@@ -4,7 +4,7 @@ Otto Master 是一个面向 Otto 机器人集群的跨平台 Python Runtime。�
 
 ## 当前状态
 
-当前为 **Phase 1 / 0.1.0 Runtime 与 Message Bus**：配置加载、消息合同、异步消息总线、Runtime 生命周期和结构化日志已经实现并通过自动测试。硬件、Web、SQLite 和真实云服务仍未接入。
+当前为 **Phase 3 / 0.3.0 已完成**：Runtime、Message Bus、SQLite、FastAPI控制面、离线WebUI、OTA、mDNS和内嵌MQTT Broker已完成macOS本机联调，并通过macOS/Windows GitHub Actions与两平台PyInstaller Broker smoke。设备会话、MQTT协议翻译、动作闭环、语音云服务和真机接入仍属于后续Phase。
 
 ## 核心架构
 
@@ -30,9 +30,11 @@ WebUI ─────────────────────── Gate
 uv run --project . python -m otto_master
 ```
 
-入口会持续运行，收到 `SIGINT` 或 `SIGTERM` 后优雅关闭。当前阶段只启动进程内 Runtime，不监听 Web 或设备端口。
+入口会持续运行，默认监听Web `8080` 和MQTT `1883`，发布 `master.local`，收到 `SIGINT` 或 `SIGTERM` 后按依赖反向关闭。
 
-## Phase 1 开发检查
+默认配置绑定局域网地址。暴露到局域网前，在本地 `.env` 设置高强度 `OTTO_CONSOLE_TOKEN` 和 `OTTO_PROVISIONING_TOKEN`；未配置时，状态修改、WebSocket事件流和设备发放接口会失败关闭。MQTT禁止匿名连接，Master缺少显式密码时会在 `.local-secrets/` 生成随机本地凭据。
+
+## 开发检查
 
 ```bash
 uv run --project . --extra dev ruff check src tests
@@ -50,6 +52,7 @@ uv run --project . --extra dev pytest -q
 - [docs/DEV_PROGRESS.md](docs/DEV_PROGRESS.md)：当前进度
 - [docs/MESSAGE_CONTRACTS.md](docs/MESSAGE_CONTRACTS.md)：内部消息格式
 - [docs/MQTT_CONTROL_CONTRACT.md](docs/MQTT_CONTROL_CONTRACT.md)：MQTT Topic、动作协议、迁移与EVA真机验收
+- [docs/SERVER_CONSOLE_REQUIREMENTS.md](docs/SERVER_CONSOLE_REQUIREMENTS.md)：打包前Web控制台、设备接入、连接验证、动作闭环和验收清单
 
 ## 运行产物
 

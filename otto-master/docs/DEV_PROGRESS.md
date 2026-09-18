@@ -2,12 +2,13 @@
 
 ## 当前版本
 
-版本以 `pyproject.toml` 为准，当前为 `0.2.0`。
+版本以 `pyproject.toml` 为准，当前为 `0.3.0`。
 
 ## Git迭代
 
 - Phase 0+1恢复基线 `test0.1` 已推送，远程哈希为 `e0097c4649322175356487f13d73fde078afdd09`。
-- Phase 2本轮支线为 `test0.2`；测试全部通过后提交并推送，再核对远程哈希。
+- Phase 2支线 `test0.2` 已推送，远程哈希为 `cf2bc419810df69cfa92dea0fa32df613d85fecd`。
+- Phase 3本轮支线为 `test0.3`，明确从已验收的 `test0.2` 继续；跨平台探针run `35299220306`的macOS/Windows jobs均PASS。
 - 此后每个阶段或补充检查点使用下一个 `testN.N` 编号。
 - 支线编号与产品版本分别记录，互不驱动。
 
@@ -18,15 +19,15 @@
 | Phase 0 文档脚手架 | 已完成 |
 | Phase 1 Runtime与Message Bus | 已完成 |
 | Phase 2 SQLite | 已完成 |
-| Phase 3 Web/OTA/mDNS/Embedded MQTT Broker | 未开始 |
+| Phase 3 Web/OTA/mDNS/Embedded MQTT Broker | 已完成 |
 | Phase 4 MQTT控制/TCP回退/WebSocket兼容 | 未开始 |
 | Phase 5 Opus/ASR/TTS | 未开始 |
 | Phase 6 WakeGate | 未开始 |
 | Phase 7 LLM/Dispatcher/动作 | 未开始 |
 | Phase 8 集群/日志/容错 | 未开始 |
 | Phase 9 Windows打包 | 未开始 |
-| Python业务实现 | Phase 1+2已实现；后续业务模块仍为空占位 |
-| 自动测试 | 16通过 |
+| Python业务实现 | Phase 1-3网络基座已实现；Device Session与后续业务仍为空占位 |
+| 自动测试 | 28通过；Ruff与mypy strict通过 |
 | 硬件验证 | 未运行 |
 
 ## 已完成
@@ -46,14 +47,19 @@
 - Phase 1已通过 `ruff check src tests`、`mypy src`、10个pytest单元测试，以及 `python -m otto_master` 启动/中断退出冒烟测试。
 - Phase 2已实现aiosqlite连接生命周期、schema migration、设备/分组/消息/命令/结果/设置表、消息observer、敏感字段脱敏、payload大小限制和单写者事务入口。
 - Phase 2已通过首次建库、重复迁移、100路并发消息写入、脱敏、Runtime关闭刷盘和全量16个pytest测试；默认入口实际生成 `data/otto.db` 并正常关闭。
+- Phase 3已实现FastAPI静态控制台、稳定错误与correlation ID、组件健康、设备/命令API骨架、设置白名单、OTA manifest/下载/受保护发放、事件snapshot+cursor恢复和慢客户端隔离。
+- Phase 3已实现同进程aMQTT 0.12.1 Broker、自有凭据存储、禁止匿名、client_id绑定与Master/每设备最小Topic ACL；本机真实MQTT往返和跨设备拒绝通过。
+- Phase 3已实现`master.local`服务记录注册/解析/注销；本机广播解析到实际局域网地址，Runtime真实HTTP/WebSocket启动、事件推送、反向关闭及端口释放通过。
+- macOS PyInstaller onefile Broker smoke已构建并运行，输出`mqtt-broker-smoke:pass`。
+- GitHub Actions run `35299220306`：Windows job `105458103512`、macOS job `105458103740`均通过锁定安装、Ruff、mypy、26个测试、PyInstaller构建和对应平台可执行文件实跑。
 
 ## 进行中
 
-- 无。Phase 2已完成，等待Phase 3 Web、REST、OTA、mDNS和内嵌MQTT Broker。
+- 无。Phase 3已通过本机与远程跨平台门禁，等待`test0.3`最终提交、push和远程哈希核对。
 
 ## 下一步
 
-下一步使用 `test0.3` 进入Phase 3，实现Web、REST、OTA、mDNS和内嵌MQTT Broker；继续遵守先备份、冻结契约、测试和远程核对门禁。
+完成`test0.3`最终提交、push和远程哈希核对后进入`test0.4`，实现Phase 4 Device MQTT Gateway、假设备Session和状态闭环，再安排EVA1/EVA2真机安全测试。
 
 ## 已知风险
 
@@ -62,4 +68,5 @@
 - DeepSeek模型名称来自当前官方配置；实现阶段仍需用新密钥完成一次真实连通测试。
 - ESP32云端唤醒需要固件在休眠时通过VAD触发音频上传，服务端完成后仍需配套固件改造。
 - 固件2.0.5的MQTT入口缺少stop、独立hello/heartbeat和命令ID去重；Phase 4必须补齐后再启用QoS 1。
-- 内嵌MQTT Broker库必须在macOS与Windows完成启动、ACL、PyInstaller和断线恢复验证，不能只验证导入成功。
+- Windows真实局域网mDNS、防火墙提示和完整应用打包仍留给Phase 9实体Windows环境；本轮Windows CI已覆盖aMQTT认证/ACL、Runtime网络集成和Broker PyInstaller可执行文件。
+- 设备在线状态、动作ACK/moving/idle和Broker重启后的设备恢复属于Phase 4，当前控制台明确返回组件未就绪，不伪造在线。

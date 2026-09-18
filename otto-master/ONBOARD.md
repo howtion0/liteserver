@@ -47,13 +47,15 @@ mDNS / OTA     ───┘                                  ├─ WakeGate
 |---|---|
 | Phase 0 文档和目录 | 已完成 |
 | Phase 1 Runtime与Message Bus | 已完成 |
-| Python业务代码 | Phase 1已实现；硬件/Web/云服务未接入 |
-| WebUI | 空占位 |
-| SQLite数据库 | 未生成 |
+| Phase 2 SQLite | 已完成 |
+| Phase 3 网络控制面 | 已完成；macOS/Windows CI与两平台PyInstaller smoke通过 |
+| Python业务代码 | Phase 1-3已实现；设备会话、动作和云服务未接入 |
+| WebUI | P0状态/设备/事件/设置/OTA骨架已实现 |
+| SQLite数据库 | 运行时自动创建并迁移 |
 | 固件文件 | 未放入 |
-| 测试 | Phase 1：10个自动测试通过 |
+| 测试 | 28个自动测试通过；mDNS与PyInstaller本机smoke通过 |
 
-当前工程可启动Phase 1基础Runtime，但Web、SQLite、硬件接入和云服务仍未实现；不能把后续空占位文件视为功能完成。
+当前工程可启动本地控制面和Broker，但设备列表业务在线状态、动作验证和命令闭环要到Phase 4/7实现；稳定API骨架返回“组件未就绪”不代表对应业务已经完成。
 
 ## 5. 文档索引
 
@@ -71,6 +73,7 @@ mDNS / OTA     ───┘                                  ├─ WakeGate
 | 施工记录 | `docs/LOG.md` |
 | 消息格式和主题 | `docs/MESSAGE_CONTRACTS.md` |
 | MQTT控制、迁移和EVA真机验收 | `docs/MQTT_CONTROL_CONTRACT.md` |
+| Server控制台与打包前验收 | `docs/SERVER_CONSOLE_REQUIREMENTS.md` |
 | 调试路线 | `docs/DEBUG_GUIDE.md` |
 
 ## 6. 计划中的开发环境

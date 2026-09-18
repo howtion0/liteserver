@@ -1,1 +1,146 @@
-<!-- Phase 0 WebUI placeholder. No implementation yet. -->
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="dark">
+    <title>Otto Master 控制台</title>
+    <link rel="stylesheet" href="/assets/style.css">
+  </head>
+  <body>
+    <header class="topbar">
+      <div>
+        <p class="eyebrow">LOCAL ROBOT CONTROL PLANE</p>
+        <h1>Otto Master</h1>
+      </div>
+      <div class="topbar-actions">
+        <span id="connection-badge" class="badge unknown">正在连接</span>
+        <button id="refresh-button" class="secondary" type="button">刷新状态</button>
+      </div>
+    </header>
+
+    <main>
+      <section class="hero" aria-labelledby="overview-title">
+        <div>
+          <p class="section-label">总览</p>
+          <h2 id="overview-title">系统运行状态</h2>
+          <p id="system-summary" class="muted">正在读取服务端状态…</p>
+        </div>
+        <button id="cluster-stop" class="danger" type="button">集群紧急停止</button>
+      </section>
+
+      <section class="metric-grid" aria-label="关键指标">
+        <article class="metric-card">
+          <span>Server</span>
+          <strong id="server-state">未知</strong>
+          <small id="server-version">—</small>
+        </article>
+        <article class="metric-card">
+          <span>MQTT Broker</span>
+          <strong id="mqtt-state">未知</strong>
+          <small id="mqtt-detail">—</small>
+        </article>
+        <article class="metric-card">
+          <span>设备</span>
+          <strong id="device-count">0</strong>
+          <small>当前登记记录</small>
+        </article>
+        <article class="metric-card">
+          <span>事件游标</span>
+          <strong id="event-cursor">0</strong>
+          <small id="event-stream">等待事件流</small>
+        </article>
+      </section>
+
+      <section class="panel" aria-labelledby="components-title">
+        <div class="panel-heading">
+          <div>
+            <p class="section-label">HEALTH</p>
+            <h2 id="components-title">组件健康</h2>
+          </div>
+          <span id="health-checked-at" class="muted">—</span>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>组件</th><th>状态</th><th>详情</th></tr></thead>
+            <tbody id="component-table"><tr><td colspan="3">正在加载…</td></tr></tbody>
+          </table>
+        </div>
+      </section>
+
+      <div class="two-column">
+        <section class="panel" aria-labelledby="devices-title">
+          <div class="panel-heading">
+            <div>
+              <p class="section-label">DEVICES</p>
+              <h2 id="devices-title">设备</h2>
+            </div>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>名称</th><th>device_id</th><th>状态</th><th>传输</th></tr></thead>
+              <tbody id="device-table"><tr><td colspan="4">暂无设备</td></tr></tbody>
+            </table>
+          </div>
+        </section>
+
+        <section class="panel" aria-labelledby="firmware-title">
+          <div class="panel-heading">
+            <div>
+              <p class="section-label">OTA</p>
+              <h2 id="firmware-title">固件</h2>
+            </div>
+            <a id="firmware-download" class="button-link hidden" href="/api/v1/firmware/download">下载</a>
+          </div>
+          <dl class="details">
+            <div><dt>可用状态</dt><dd id="firmware-state">未知</dd></div>
+            <div><dt>版本</dt><dd id="firmware-version">—</dd></div>
+            <div><dt>目标硬件</dt><dd id="firmware-hardware">—</dd></div>
+            <div><dt>大小</dt><dd id="firmware-size">—</dd></div>
+            <div><dt>SHA-256</dt><dd id="firmware-sha">—</dd></div>
+          </dl>
+        </section>
+      </div>
+
+      <section class="panel" aria-labelledby="events-title">
+        <div class="panel-heading">
+          <div>
+            <p class="section-label">LIVE STREAM</p>
+            <h2 id="events-title">实时事件</h2>
+          </div>
+          <span id="stream-badge" class="badge unknown">未连接</span>
+        </div>
+        <ol id="event-list" class="event-list" aria-live="polite">
+          <li class="empty">尚无事件</li>
+        </ol>
+      </section>
+
+      <section class="panel" aria-labelledby="settings-title">
+        <div class="panel-heading">
+          <div>
+            <p class="section-label">SETTINGS</p>
+            <h2 id="settings-title">安全设置摘要</h2>
+          </div>
+        </div>
+        <div class="settings-layout">
+          <pre id="settings-view">正在加载…</pre>
+          <form id="token-form" class="token-form">
+            <label for="console-token">控制台令牌（仅保存在当前标签页）</label>
+            <div class="input-row">
+              <input id="console-token" type="password" autocomplete="off" placeholder="OTTO_CONSOLE_TOKEN">
+              <button class="secondary" type="submit">应用并重连</button>
+            </div>
+            <p class="muted">令牌仅用于控制请求与事件流，不包含任何 MQTT 设备凭据。</p>
+          </form>
+        </div>
+      </section>
+    </main>
+
+    <footer>
+      <span>浏览器 → Web Gateway → Message Bus → Device Session → MQTT</span>
+      <span id="footer-clock">—</span>
+    </footer>
+    <div id="toast" class="toast hidden" role="status" aria-live="polite"></div>
+    <script src="/assets/app.js" defer></script>
+  </body>
+</html>

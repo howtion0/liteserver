@@ -41,6 +41,20 @@
 
 ## 最近记录
 
+### 2026-09-18 / Phase 3 / 本地网络控制面与Embedded MQTT Broker
+
+- 版本：`0.3.0`
+- Git迭代：`test0.3`，基线为已推送的 `test0.2` / `cf2bc419810df69cfa92dea0fa32df613d85fecd`
+- 目标：在同一Python进程打通Web/API、状态事件、OTA、mDNS、SQLite查询与安全的MQTT 3.1.1 Broker。
+- 修改：新增aMQTT适配与动态每设备凭据/ACL、FastAPI控制面、静态控制台、EventHub snapshot+cursor、OTA manifest/下载/发放、mDNS服务、Runtime网络生命周期和跨平台CI/PyInstaller smoke。
+- 安全：匿名MQTT拒绝；用户名、密码和client_id交叉验证；设备只能发布自己的up并订阅自己的down；Browser API无任意Topic入口；非loopback修改、WebSocket与设备发放均失败关闭；响应和事件脱敏。
+- 本机验证：`ruff check src tests` PASS；`mypy src` PASS；`pytest -q` 28 PASS；真实HTTP/WebSocket事件推送与端口释放PASS；真实MQTT认证、ACL、往返与关闭PASS；mDNS注册、解析`master.local`和注销PASS；macOS PyInstaller onefile Broker smoke输出`mqtt-broker-smoke:pass`。
+- 返工：真实WebSocket关闭测试发现服务端未并行监听disconnect，导致Uvicorn等待心跳并占用端口；改为同时等待客户端帧与事件队列，并增加强制关闭路径后复测通过。
+- 远程验证：GitHub Actions run `35299220306`中Windows job `105458103512`、macOS job `105458103740`全部success；两边均完成锁定安装、Ruff、mypy、26个pytest、PyInstaller构建和Broker可执行文件实跑。
+- 未运行：ESP32/EVA真机、Device MQTT Gateway和动作闭环属于Phase 4；Windows实体局域网mDNS、防火墙和完整应用包属于Phase 9。
+- 状态：Phase 3实现和跨平台门禁PASS；仍不合并main，按规则只提交并push `test0.3`。
+- 下一步：完成远程跨平台矩阵与哈希核对后进入`test0.4`假设备/Device Session联调。
+
 ### 2026-09-18 / Phase 0 / Otto Master文档脚手架
 
 - 版本：`0.0.0`
