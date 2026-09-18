@@ -1164,9 +1164,9 @@ async def test_laughter_without_busy_true_fails_closed_and_never_arms_asr() -> N
         FakeSentencePlayer(trace),
         dispatcher,
         FakePlaybackSink(trace),
-        query_interval_seconds=0.001,
-        query_timeout_seconds=0.01,
-        laughter_timeout_seconds=0.04,
+        query_interval_seconds=0.005,
+        query_timeout_seconds=0.1,
+        laughter_timeout_seconds=0.25,
     )
 
     await bus.start()
@@ -1202,9 +1202,9 @@ async def test_new_device_session_recovers_after_a_failed_laughter_gate() -> Non
         FakeSentencePlayer(trace),
         dispatcher,
         FakePlaybackSink(trace),
-        query_interval_seconds=0.001,
-        query_timeout_seconds=0.01,
-        laughter_timeout_seconds=0.04,
+        query_interval_seconds=0.005,
+        query_timeout_seconds=0.1,
+        laughter_timeout_seconds=0.25,
     )
 
     await bus.start()
@@ -1244,9 +1244,9 @@ async def test_laughter_busy_without_false_completion_fails_closed() -> None:
         FakeSentencePlayer(trace),
         dispatcher,
         FakePlaybackSink(trace),
-        query_interval_seconds=0.001,
-        query_timeout_seconds=0.01,
-        laughter_timeout_seconds=0.04,
+        query_interval_seconds=0.005,
+        query_timeout_seconds=0.1,
+        laughter_timeout_seconds=0.25,
     )
 
     await bus.start()
