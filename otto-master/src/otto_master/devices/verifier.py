@@ -15,6 +15,7 @@ from ..messages import JsonValue, Message, MessageKind
 from .manager import DeviceManager
 
 StatusProvider = Callable[[], Mapping[str, Any]]
+TransportStatusProvider = Callable[[str], Mapping[str, Any]]
 Clock = Callable[[], datetime]
 Timer = Callable[[], float]
 
@@ -35,6 +36,7 @@ class VerificationInterruptedError(RuntimeError):
 class _PendingResponse:
     target: str
     expected_topic: str
+    transport: str
     future: asyncio.Future[Message]
 
 
@@ -48,6 +50,7 @@ class DeviceVerifier:
         *,
         broker_status: StatusProvider,
         gateway_status: StatusProvider,
+        transport_status: TransportStatusProvider | None = None,
         timeout_seconds: float,
         clock: Clock = _utc_now,
         timer: Timer = monotonic,
@@ -58,6 +61,7 @@ class DeviceVerifier:
         self.device_manager = device_manager
         self.broker_status = broker_status
         self.gateway_status = gateway_status
+        self.transport_status = transport_status
         self.timeout_seconds = timeout_seconds
         self.clock = clock
         self.timer = timer
@@ -96,7 +100,9 @@ class DeviceVerifier:
 
     async def __call__(self, message: Message) -> None:
         if message.topic == "device.transport.unavailable":
-            self._interrupt_all("MQTT transport became unavailable")
+            transport = message.payload.get("transport")
+            if isinstance(transport, str):
+                self._interrupt_transport(transport, f"{transport} transport became unavailable")
             return
         if message.topic == "device.state.changed":
             status = message.payload.get("status")
@@ -108,6 +114,8 @@ class DeviceVerifier:
             return
         pending = self._pending.get(correlation_id)
         if pending is None or pending.target != message.target or pending.future.done():
+            return
+        if message.payload.get("transport") != pending.transport:
             return
         if message.topic == "device.command.failed":
             reason = message.payload.get("reason")
@@ -169,20 +177,36 @@ class DeviceVerifier:
             report["failure"] = "device session disappeared"
             return await self._finish(report, started_timer)
 
-        broker = self.broker_status()
-        gateway = self.gateway_status()
-        self._add_check(
-            checks,
-            "mqtt_broker",
-            broker.get("healthy") is True,
-            str(broker.get("state", "unknown")),
-        )
-        self._add_check(
-            checks,
-            "mqtt_gateway",
-            gateway.get("healthy") is True,
-            str(gateway.get("state", "unknown")),
-        )
+        transport_value = device.get("transport")
+        transport = transport_value if isinstance(transport_value, str) else "unknown"
+        report["transport"] = transport
+        if transport == "mqtt":
+            broker = self.broker_status()
+            gateway = self.gateway_status()
+            self._add_check(
+                checks,
+                "mqtt_broker",
+                broker.get("healthy") is True,
+                str(broker.get("state", "unknown")),
+            )
+            self._add_check(
+                checks,
+                "mqtt_gateway",
+                gateway.get("healthy") is True,
+                str(gateway.get("state", "unknown")),
+            )
+        else:
+            gateway = (
+                self.transport_status(transport)
+                if self.transport_status is not None
+                else self.gateway_status()
+            )
+            self._add_check(
+                checks,
+                "transport_gateway",
+                gateway.get("healthy") is True,
+                str(gateway.get("state", "unknown")),
+            )
         self._add_check(
             checks,
             "session_online",
@@ -192,8 +216,8 @@ class DeviceVerifier:
         self._add_check(
             checks,
             "transport",
-            device.get("transport") == "mqtt",
-            str(device.get("transport", "unknown")),
+            transport in {"mqtt", "tcp", "websocket"},
+            transport,
         )
         heartbeat = device.get("last_heartbeat_at")
         self._add_check(
@@ -228,6 +252,7 @@ class DeviceVerifier:
 
         state_response, state_command_id, state_latency, state_error = await self._request(
             device_id=device_id,
+            transport=transport,
             request_topic="device.state.query.requested",
             response_topic="device.state.received",
         )
@@ -249,6 +274,7 @@ class DeviceVerifier:
         actions_response, actions_command_id, actions_latency, actions_error = (
             await self._request(
                 device_id=device_id,
+                transport=transport,
                 request_topic="device.actions.query.requested",
                 response_topic="device.actions.catalog.received",
             )
@@ -277,6 +303,7 @@ class DeviceVerifier:
         self,
         *,
         device_id: str,
+        transport: str,
         request_topic: str,
         response_topic: str,
     ) -> tuple[Message | None, str, float, str | None]:
@@ -285,12 +312,13 @@ class DeviceVerifier:
             kind=MessageKind.COMMAND,
             source="device_verifier",
             target=f"device:{device_id}",
-            payload={"device_id": device_id, "transport": "mqtt"},
+            payload={"device_id": device_id, "transport": transport},
         )
         future: asyncio.Future[Message] = asyncio.get_running_loop().create_future()
         self._pending[command.message_id] = _PendingResponse(
             target=command.target,
             expected_topic=response_topic,
+            transport=transport,
             future=future,
         )
         started = self.timer()
@@ -360,6 +388,11 @@ class DeviceVerifier:
     def _interrupt_all(self, reason: str) -> None:
         for pending in tuple(self._pending.values()):
             if not pending.future.done():
+                pending.future.set_exception(VerificationInterruptedError(reason))
+
+    def _interrupt_transport(self, transport: str, reason: str) -> None:
+        for pending in self._pending.values():
+            if pending.transport == transport and not pending.future.done():
                 pending.future.set_exception(VerificationInterruptedError(reason))
 
     def _interrupt_target(self, target: str, reason: str) -> None:

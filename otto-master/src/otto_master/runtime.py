@@ -19,6 +19,8 @@ from .devices.verifier import DeviceVerifier
 from .dispatch.commands import CommandRepository
 from .dispatch.dispatcher import CommandDispatcher
 from .gateways.device_mqtt import DeviceMqttGateway
+from .gateways.device_tcp import DeviceTcpGateway
+from .gateways.device_ws import DeviceWebsocketGateway
 from .gateways.mdns import MdnsError, MdnsGateway
 from .gateways.mqtt_broker import EmbeddedMqttBroker
 from .gateways.web import EventHub, WebContext, WebGateway
@@ -64,11 +66,23 @@ class Runtime:
             self.mqtt_broker,
             self.message_bus,
         )
+        self.device_tcp = DeviceTcpGateway(
+            config.tcp,
+            self.mqtt_broker.credentials,
+            self.message_bus,
+        )
+        self.device_websocket = DeviceWebsocketGateway(
+            config.device_websocket,
+            config.audio,
+            self.mqtt_broker.credentials,
+            self.message_bus,
+        )
         self.device_verifier = DeviceVerifier(
             self.message_bus,
             self.device_manager,
             broker_status=self.mqtt_broker.status,
             gateway_status=self.device_mqtt.status,
+            transport_status=self._transport_status,
             timeout_seconds=config.mqtt.query_timeout_seconds,
         )
         self.command_repository = CommandRepository(self.database)
@@ -99,6 +113,7 @@ class Runtime:
                 component_status=self.component_status,
                 started_at=self._started_at,
                 started_monotonic=self._started_monotonic,
+                device_websocket=self.device_websocket,
             )
         )
         self.worker_pool = ThreadPoolExecutor(
@@ -130,11 +145,15 @@ class Runtime:
             self._storage_observer_id = await self.message_bus.subscribe_observer(
                 self._message_logger
             )
+            await self.mqtt_broker.credentials.start()
             await self.mqtt_broker.start()
             await self.device_manager.start()
             await self.device_verifier.start()
             await self.dispatcher.start()
             await self.device_mqtt.start()
+            await self.device_tcp.start()
+            if self.config.server.enabled:
+                await self.device_websocket.start()
             await self.web.start()
             try:
                 await self.mdns.start()
@@ -196,6 +215,10 @@ class Runtime:
             await self._stop_with_timeout(self.web.shutdown(), "web gateway")
             await self._stop_with_timeout(self.device_verifier.shutdown(), "device verifier")
             await self._stop_with_timeout(self.dispatcher.shutdown(), "dispatcher")
+            await self._stop_with_timeout(
+                self.device_websocket.shutdown(), "device WebSocket gateway"
+            )
+            await self._stop_with_timeout(self.device_tcp.shutdown(), "device TCP gateway")
             await self._stop_with_timeout(self.device_mqtt.shutdown(), "MQTT device gateway")
             await self._stop_with_timeout(self.message_bus.drain(), "message bus drain")
             await self._stop_with_timeout(self.device_manager.shutdown(), "device manager")
@@ -236,6 +259,8 @@ class Runtime:
             },
             "mqtt": self.mqtt_broker.status(),
             "mqtt_gateway": self.device_mqtt.status(),
+            "tcp_gateway": self.device_tcp.status(),
+            "device_websocket": self.device_websocket.status(),
             "device_manager": {
                 "enabled": True,
                 "healthy": self.device_manager.running,
@@ -268,6 +293,10 @@ class Runtime:
             await self._stop_with_timeout(self.web.shutdown(), "web gateway")
             await self._stop_with_timeout(self.device_verifier.shutdown(), "device verifier")
             await self._stop_with_timeout(self.dispatcher.shutdown(), "dispatcher")
+            await self._stop_with_timeout(
+                self.device_websocket.shutdown(), "device WebSocket gateway"
+            )
+            await self._stop_with_timeout(self.device_tcp.shutdown(), "device TCP gateway")
             await self._stop_with_timeout(self.device_mqtt.shutdown(), "MQTT device gateway")
             await self._stop_with_timeout(self.message_bus.drain(), "message bus drain")
             await self._stop_with_timeout(self.device_manager.shutdown(), "device manager")
@@ -319,6 +348,20 @@ class Runtime:
             task.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)
         self._background_tasks.clear()
+
+    def _transport_status(self, transport: str) -> dict[str, Any]:
+        if transport == "mqtt":
+            broker = self.mqtt_broker.status()
+            gateway = self.device_mqtt.status()
+            return {
+                "healthy": broker.get("healthy") is True and gateway.get("healthy") is True,
+                "state": f"broker={broker.get('state')},gateway={gateway.get('state')}",
+            }
+        if transport == "tcp":
+            return self.device_tcp.status()
+        if transport == "websocket":
+            return self.device_websocket.status()
+        return {"healthy": False, "state": "unsupported"}
 
     async def __aenter__(self) -> Self:
         await self.start()

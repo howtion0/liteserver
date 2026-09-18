@@ -31,6 +31,23 @@ dispatch:
   completion_timeout_seconds: 15
   state_query_interval_seconds: 1
 
+tcp:
+  enabled: false
+  host: 0.0.0.0
+  port: 8765
+  max_connections: 32
+  hello_timeout_seconds: 5
+  write_timeout_seconds: 3
+  max_frame_bytes: 65536
+
+device_websocket:
+  enabled: true
+  hello_timeout_seconds: 10
+  heartbeat_seconds: 5
+  max_connections: 32
+  max_frame_bytes: 65536
+  audio_buffer_frames_per_device: 64
+
 runtime:
   message_queue_size: 1024
   worker_threads: 4

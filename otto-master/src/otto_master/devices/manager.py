@@ -102,9 +102,28 @@ class DeviceManager:
     async def __call__(self, message: Message) -> None:
         if message.topic == "device.transport.unavailable":
             reason = message.payload.get("reason")
+            transport = message.payload.get("transport")
+            if not isinstance(transport, str):
+                return
             await self.mark_transport_unavailable(
-                reason if isinstance(reason, str) else "mqtt_gateway_unavailable"
+                reason if isinstance(reason, str) else "transport_unavailable",
+                transport=transport,
             )
+            return
+        if message.topic == "device.disconnected":
+            device_id = message.payload.get("device_id")
+            transport = message.payload.get("transport")
+            reason = message.payload.get("reason")
+            if (
+                isinstance(device_id, str)
+                and isinstance(transport, str)
+                and message.target == f"device:{device_id}"
+            ):
+                await self.mark_device_transport_unavailable(
+                    device_id,
+                    transport,
+                    reason if isinstance(reason, str) else "device_disconnected",
+                )
             return
         handlers = {
             "device.connected": self._apply_hello,
@@ -134,6 +153,13 @@ class DeviceManager:
                 self._sessions[device_id] = session
             if not session.enabled:
                 return
+            incoming_transport = message.payload.get("transport")
+            if (
+                message.topic
+                in {"device.state.received", "device.actions.catalog.received"}
+                and incoming_transport != session.transport
+            ):
+                return
             try:
                 changed = await handler(session, message, now)
             except (DeviceStateError, TypeError, ValueError) as exc:
@@ -146,7 +172,10 @@ class DeviceManager:
             if changed:
                 self._apply_name_conflict(session)
                 await self._persist(session)
-                if message.topic == "device.actions.catalog.received":
+                if message.topic in {
+                    "device.connected",
+                    "device.actions.catalog.received",
+                }:
                     await self.database.save_device_actions(
                         session.device_id,
                         session.actions,
@@ -188,6 +217,10 @@ class DeviceManager:
                     offline_seconds=self.offline_seconds,
                 ):
                     await self._persist(session)
+                    await self.database.save_device_actions(
+                        session.device_id,
+                        session.actions,
+                    )
                     events.append(self._state_event(session))
         for event in events:
             await self.message_bus.publish(event)
@@ -197,6 +230,7 @@ class DeviceManager:
         reason: str,
         *,
         status: DeviceStatus = DeviceStatus.ERROR,
+        transport: str | None = None,
     ) -> None:
         events: list[Message] = []
         async with self._lock:
@@ -209,18 +243,61 @@ class DeviceManager:
                 }:
                     continue
                 previous_error = session.last_error
-                had_hello = session.hello_received
-                try:
-                    transitioned = session.transition(status)
-                except DeviceStateError:
-                    transitioned = False
-                session.hello_received = False
+                transitioned: bool
+                if transport is not None:
+                    try:
+                        changed_transport = session.remove_transport(transport, status=status)
+                    except DeviceStateError:
+                        changed_transport = False
+                    if not changed_transport:
+                        continue
+                    transitioned = changed_transport
+                else:
+                    had_transport = bool(session.transport_last_seen)
+                    session.transport_last_seen.clear()
+                    try:
+                        transitioned = session.transition(status)
+                    except DeviceStateError:
+                        transitioned = False
+                    session.hello_received = False
+                    session.last_heartbeat_at = None
+                    transitioned = transitioned or had_transport
                 session.last_error = reason
-                changed = transitioned or had_hello or previous_error != reason
+                changed = transitioned or previous_error != reason
                 if changed:
                     await self._persist(session)
+                    await self.database.save_device_actions(
+                        session.device_id,
+                        session.actions,
+                    )
                     events.append(self._state_event(session))
         for event in events:
+            await self.message_bus.publish(event)
+
+    async def mark_device_transport_unavailable(
+        self,
+        device_id: str,
+        transport: str,
+        reason: str,
+    ) -> None:
+        event: Message | None = None
+        async with self._lock:
+            session = self._sessions.get(device_id)
+            if session is None:
+                return
+            try:
+                changed = session.remove_transport(transport, status=DeviceStatus.OFFLINE)
+            except DeviceStateError:
+                changed = False
+            if changed:
+                session.last_error = reason
+                await self._persist(session)
+                await self.database.save_device_actions(
+                    session.device_id,
+                    session.actions,
+                )
+                event = self._state_event(session)
+        if event is not None:
             await self.message_bus.publish(event)
 
     async def _apply_hello(
@@ -237,8 +314,7 @@ class DeviceManager:
         message: Message,
         now: datetime,
     ) -> bool:
-        del message
-        return session.apply_heartbeat(now)
+        return session.apply_heartbeat(dict(message.payload), now)
 
     async def _apply_state(
         self,

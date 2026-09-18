@@ -112,6 +112,7 @@ class CommandSpec:
     device_id: str
     target: str
     source: str
+    transport: str = "mqtt"
     action: str | None = None
     parameters: dict[str, JsonValue] | None = None
     confirmation: bool = False
@@ -127,6 +128,7 @@ class CommandSpec:
             "command_type": self.command_type.value,
             "device_id": self.device_id,
             "source": self.source,
+            "transport": self.transport,
             "confirmation": self.confirmation,
         }
         if self.action is not None:

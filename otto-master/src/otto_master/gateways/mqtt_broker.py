@@ -149,6 +149,40 @@ class MqttCredentialStore:
             return False
         return hmac.compare_digest(credential.password, password)
 
+    def authenticate_device_token(self, value: str, token: str | None) -> bool:
+        """Validate a provisioned device secret without exposing the credential."""
+
+        if not self._loaded or token is None:
+            return False
+        try:
+            device_id = normalize_device_id(value)
+        except ValueError:
+            return False
+        username = self._device_usernames.get(device_id)
+        if username is None:
+            return False
+        credential = self._credentials.get(username)
+        return bool(
+            credential is not None
+            and credential.role is CredentialRole.DEVICE
+            and hmac.compare_digest(credential.password, token)
+        )
+
+    def expected_device_client_id(self, value: str) -> str | None:
+        """Return the non-secret provisioned client identity for TCP validation."""
+
+        if not self._loaded:
+            return None
+        try:
+            device_id = normalize_device_id(value)
+        except ValueError:
+            return None
+        username = self._device_usernames.get(device_id)
+        credential = self._credentials.get(username) if username is not None else None
+        if credential is None or credential.role is not CredentialRole.DEVICE:
+            return None
+        return credential.client_id
+
     def authorize(self, username: str | None, topic: str | None, action: Action | None) -> bool:
         if not self._loaded or not username or not topic or action is None:
             return False

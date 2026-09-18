@@ -2,7 +2,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from otto_master.config import load_config
+import pytest
+
+from otto_master.config import ConfigError, load_config
 
 
 def test_repository_config_loads_without_exposing_secret_values() -> None:
@@ -27,6 +29,12 @@ def test_repository_config_loads_without_exposing_secret_values() -> None:
     assert config.dispatch.ack_timeout_seconds == 3
     assert config.dispatch.completion_timeout_seconds == 15
     assert config.dispatch.state_query_interval_seconds == 1
+    assert config.tcp.enabled is False
+    assert config.tcp.port == 8765
+    assert config.tcp.max_frame_bytes == 65536
+    assert config.device_websocket.enabled is True
+    assert config.device_websocket.heartbeat_seconds == 5
+    assert config.server.websocket_path == "/xiaozhi/v1/"
     assert config.secrets.console_token == "console-super-secret"
     assert config.secrets.mqtt_master_password == "mqtt-super-secret"
     assert config.secrets.provisioning_token == "provision-super-secret"
@@ -43,3 +51,32 @@ def test_environment_substitution_uses_explicit_overrides(tmp_path: Path) -> Non
 
     assert config.project.name == "test-master"
     assert config.config_path == target.resolve()
+
+
+@pytest.mark.parametrize(
+    ("original", "invalid", "error"),
+    [
+        ("  port: 8765", "  port: 70000", "tcp.port"),
+        ("  max_frame_bytes: 65536", "  max_frame_bytes: 128", "max_frame_bytes"),
+        ("  heartbeat_seconds: 5", "  heartbeat_seconds: 0", "heartbeat_seconds"),
+        (
+            "  websocket_path: /xiaozhi/v1/",
+            "  websocket_path: xiaozhi/v1/",
+            "websocket_path",
+        ),
+    ],
+)
+def test_transport_configuration_rejects_unsafe_bounds(
+    tmp_path: Path,
+    original: str,
+    invalid: str,
+    error: str,
+) -> None:
+    source = Path(__file__).parents[1] / "config.yaml"
+    target = tmp_path / "config.yaml"
+    contents = source.read_text(encoding="utf-8")
+    assert original in contents
+    target.write_text(contents.replace(original, invalid, 1), encoding="utf-8")
+
+    with pytest.raises(ConfigError, match=error):
+        load_config(target)

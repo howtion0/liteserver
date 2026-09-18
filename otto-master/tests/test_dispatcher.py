@@ -110,10 +110,17 @@ async def _publish(
         Message.create(
             topic=topic,
             kind=MessageKind.RESULT if topic != "device.state.received" else MessageKind.STATE,
-            source=f"device:{outbound.payload['device_id']}:mqtt",
+            source=(
+                f"device:{outbound.payload['device_id']}:"
+                f"{outbound.payload['transport']}"
+            ),
             target=outbound.target,
             correlation_id=str(outbound.payload["command_id"]),
-            payload={"device_id": outbound.payload["device_id"], **payload},
+            payload={
+                "device_id": outbound.payload["device_id"],
+                "transport": outbound.payload["transport"],
+                **payload,
+            },
         )
     )
 
@@ -545,6 +552,49 @@ async def test_transport_disconnect_is_a_terminal_command_state(tmp_path: Path) 
             repository, "disconnected-action", "disconnected"
         )
         assert disconnected["history"][-1]["error"] == "broker_disconnected"
+    finally:
+        await _close(database, bus, dispatcher)
+
+
+@pytest.mark.asyncio
+async def test_selected_transport_switch_is_a_terminal_command_state(
+    tmp_path: Path,
+) -> None:
+    database, bus, repository, dispatcher, _ = await _start(tmp_path)
+
+    async def handle_action(message: Message) -> None:
+        await _published(bus, message)
+        await _action_accepted(bus, message)
+        await bus.publish(
+            Message.create(
+                topic="device.state.changed",
+                kind=MessageKind.STATE,
+                source="device_manager",
+                target=message.target,
+                correlation_id="connection-event",
+                payload={
+                    "device_id": message.payload["device_id"],
+                    "transport": "websocket",
+                    "status": "online",
+                },
+            )
+        )
+
+    await _subscribe_outbound(bus, action=handle_action)
+    try:
+        await dispatcher.submit_action(
+            device_id="aabbccddee01",
+            action="swing",
+            parameters={"steps": 2},
+            confirmation=True,
+            command_id="transport-switched-action",
+        )
+        disconnected = await _wait_status(
+            repository,
+            "transport-switched-action",
+            "disconnected",
+        )
+        assert disconnected["history"][-1]["error"] == "device_transport_changed"
     finally:
         await _close(database, bus, dispatcher)
 

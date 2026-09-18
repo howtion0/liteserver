@@ -41,6 +41,34 @@
 
 ## 最近记录
 
+### 2026-09-18 / Phase 4D / TCP回退与Xiaozhi WebSocket兼容传输
+
+- 版本：`0.4.3`
+- Git迭代：`test0.7`，基线为已推送并通过正式矩阵的`test0.6` / `f359a1fc3a50360fbcb2de42cced2f48eeb6c164`
+- 目标：让认证TCP `otto-master/1`与Xiaozhi WebSocket v1复用MQTT的内部设备消息、Verifier、Dispatcher和持久命令生命周期，并按`mqtt → websocket → tcp`安全选择传输。
+- 修改：抽取共享设备协议翻译器；实现TCP真实Socket Gateway和设备WebSocket hello/listen/abort、Otto文本扩展及raw Opus引用缓冲；Runtime、健康、受保护发放、Manager、Session、Verifier和Dispatcher全部改为transport感知。
+- 安全：TCP/WS同时核对设备token、MAC派生device_id和client_id；Gateway只发送匹配自身transport的命令；非首选Profile隔离，传输切换不重放动作；音频原始bytes不进入Message、SQLite或Browser事件。
+- 本机验证：`uv lock --check`、Ruff、mypy strict（34个源码文件）、前端JS语法与`git diff --check`均PASS；`pytest -q`为80 PASS。真实loopback HTTP/WebSocket、TCP和内嵌MQTT并存，TCP/WS fake分别完成查询、action、stop及资源释放。
+- 返工：Dispatcher原先只接收带correlation的状态事实，无法在无correlation的首选传输切换时终止已锁定命令；改为消费全部设备状态变化并按transport失败关闭。Verifier补充错误transport拒绝；WS音频按Phase 5文档补齐`utterance_id + sequence + frame_ref`引用合同。
+- 未运行：EVA1/EVA2真机、固件修改、QoS 1、TLS、Xiaozhi v2/v3、Opus解码、ASR/TTS/LLM/WakeGate和实体Windows局域网；fake与CI不能替代这些验收。
+- 远程验证：精确暂存树`1c98ca1eb7c2c7e5efbd7f58eefc4703d38fd95a`的GitHub Actions run `35309090968`通过；Windows job `105487213519`、macOS job `105487213801`均完成80个测试、静态检查、PyInstaller构建和Broker可执行文件实跑。正式SHA结果在提交/push后由交付报告与下一检查点回填。
+- 下一步：完成`test0.7`唯一提交、push和正式SHA矩阵后按用户要求暂停，不自动创建下一支线或启动Phase 5。
+
+### 2026-09-18 / Phase 5设计 / 火山ASR、TTS与Opus接入合同
+
+- 版本：工作区当前为`0.4.3`；本轮不提升版本，不表示Phase 5已实现。
+- Git迭代：当前为进行中的`test0.7` Phase 4D工作区，远程可恢复基线为`origin/test0.6` / `f359a1fc3a50360fbcb2de42cced2f48eeb6c164`；本轮文档补充未单独commit或push，避免抢先封存尚未验收的Phase 4D代码。
+- 目标：冻结单Python、macOS开发/Windows部署条件下的火山ASR/TTS数据流、内部消息、依赖、重试、复用边界和二元验收，不编写业务代码。
+- 云烟测：火山TTS 2.0流式HTTP返回24 kHz单声道PCM，首音频约524 ms、总请求约1243 ms；267102字节PCM编码为93个60 ms Opus帧，首帧回解成功。ASR 1.0时长版双向WebSocket首个partial约986 ms，源音频结束后约369 ms返回精确最终文本。
+- 资源决定：TTS使用`seed-tts-2.0`；ASR当前使用已通过的`volc.bigasr.sauc.duration`。ASR 2.0资源返回403，按未授权/未开通处理，不能误报为API Key整体无效。
+- 架构：Message Bus只传控制状态、音频元数据和短期`frame_ref`；PCM/Opus放在按设备与utterance隔离的有界内存数据面。TTS严格执行`start → sentence_start → audio → stop`，合成完成与设备播放完成分开建模。
+- 复用：参考小智Server的WebSocket生命周期、PCM滚动缓冲、60 ms节奏、hello协商和TTS状态顺序；火山鉴权与二进制帧以当前官方协议为准，不复制旧协议或整套Server结构。
+- 跨平台：只计划使用现有`httpx`、`websockets`、`opuslib-next`，不增加FFmpeg/pydub/numpy运行时链；Windows `libopus` 和PyInstaller收集列为Phase 5/9硬门禁。
+- 本地环境：`.env`中的`OTTO_ASR_API_KEY`、`OTTO_TTS_API_KEY`和`DEEPSEEK_API_KEY`均已配置；文件权限为600且由Git忽略，文档、日志和Git中未写入真实值。因火山测试Key曾出现在用户截图中，正式部署前仍须轮换。
+- 验证：文档存在、代码围栏配对、无尾随空白、关键端点/资源ID/交叉引用、Phase 5仍标记未开始、密钥模式扫描和`git diff --check`均PASS；`.env`加载、三项变量非空、ASR/TTS Key一致、权限600和Git忽略检查PASS。
+- 未运行：Otto Master ASR/TTS实现测试、EVA1/EVA2语音与播放、MQTT加密UDP音频、WebSocket音频、Windows与PyInstaller；这些仍是Phase 5正式施工验收项。
+- 下一步：先完成并验收当前Phase 4D；随后从最新稳定基线建立下一个未占用测试支线，按`docs/VOLCENGINE_SPEECH_INTEGRATION.md`建立Session Contract再实现Phase 5。
+
 ### 2026-09-18 / Phase 4C / MQTT动作、stop与持久命令生命周期
 
 - 版本：`0.4.2`
@@ -51,9 +79,10 @@
 - 安全：动作要求online/mqtt/enabled、actions能力、动作目录、参数Schema和显式confirmation；Browser无任意Topic/JSON入口；队列满、冲突ID、断线和超时都失败关闭，动作不自动重发。
 - 本机验证：锁文件、Ruff、mypy strict和前端JS语法PASS；`pytest -q` 71 PASS。Dispatcher用例覆盖串行、并行、乱序、有界队列、stop抢占、ACK/idle超时、断线与集群stop。真实Broker双fake用例完成EVA1 `otto_action → stop`，EVA2无串线，重复command ID只下发一次，关闭后命令终态仍可查询。
 - 远程验证：GitHub Actions探针run `35306214077`中Windows job `105478815027`、macOS job `105478815315`均success；两边均完成锁定安装、Ruff、mypy、71个pytest、PyInstaller构建和Broker可执行文件实跑。
+- 最终验收：`test0.6` / `f359a1fc3a50360fbcb2de42cced2f48eeb6c164`已推送且远程哈希一致；正式run `35306518034`的Windows job `105479722338`、macOS job `105479722462`均success。
 - 返工：扩展真Broker用例后，原0.5秒心跳stale阈值在新增动作链后正确触发，改为用例内显式刷新心跳与稳定测试阈值；Pydantic不支持当前隐式递归`JsonValue`生成Schema，恢复API边界`Any`并在Message合同层完成严格复制/拒绝；额外封堵归一化参数名覆盖保留字段。
 - 未运行：EVA1/EVA2真机、固件改造、TCP回退、Xiaozhi WebSocket、QoS 1、云服务和实体Windows局域网。
-- 状态：Phase 4C本地门禁和macOS/Windows探针PASS；等待`test0.6`最终push和正式SHA矩阵。
+- 状态：Phase 4C本地门禁、跨平台探针、最终push/哈希和正式SHA矩阵全部PASS；完整Phase 4仍进行中。
 - 下一步：实现TCP `otto-master/1`回退与Xiaozhi WebSocket兼容传输，复用同一Dispatcher和命令生命周期。
 
 ### 2026-09-18 / Phase 4B / MQTT只读下行与连接验证

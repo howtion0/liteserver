@@ -3,44 +3,39 @@
 from __future__ import annotations
 
 import asyncio
-import ipaddress
-import json
 import logging
 import re
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any, NoReturn, cast
+from typing import Any
 from urllib.parse import quote
 
 from amqtt.client import MQTTClient  # type: ignore[import-untyped]
 
 from ..config import MqttConfig
 from ..message_bus import MessageBus
-from ..messages import JsonValue, Message, MessageKind
+from ..messages import Message, MessageKind
+from .device_protocol import (
+    MAX_DEVICE_MESSAGE_BYTES as _MAX_DEVICE_MESSAGE_BYTES,
+)
+from .device_protocol import (
+    OUTBOUND_COMMAND_TOPICS,
+    DeviceProtocolError,
+    decode_device_json,
+    encode_otto_command,
+    translate_otto_value,
+)
 from .mqtt_broker import EmbeddedMqttBroker, normalize_device_id
 
-MAX_DEVICE_MESSAGE_BYTES = 64 * 1024
-MAX_DEVICE_ACTIONS = 128
-MAX_JSON_DEPTH = 16
-MAX_JSON_NODES = 4096
 _UP_TOPIC = re.compile(r"^otto/v1/devices/(?P<device_id>[0-9a-f]{12})/up$")
-_QUERY_TYPES = {
-    "device.state.query.requested": "otto_query",
-    "device.actions.query.requested": "otto_actions",
-}
-_ACTION_COMMAND_TOPIC = "device.action.execute.requested"
-_STOP_COMMAND_TOPIC = "device.stop.execute.requested"
-_OUTBOUND_COMMAND_TOPICS = (*_QUERY_TYPES, _ACTION_COMMAND_TOPIC, _STOP_COMMAND_TOPIC)
-_ACTION_RESERVED_FIELDS = frozenset({"type", "id", "action"})
-MAX_ACTION_PARAMETERS = 32
+MAX_DEVICE_MESSAGE_BYTES = _MAX_DEVICE_MESSAGE_BYTES
 
 
 class DeviceMqttError(RuntimeError):
     """Raised when the gateway lifecycle cannot be established."""
 
 
-class DeviceMessageError(ValueError):
-    """Raised when an untrusted device payload violates the MQTT contract."""
+DeviceMessageError = DeviceProtocolError
 
 
 class DeviceMqttState(str, Enum):
@@ -52,86 +47,6 @@ class DeviceMqttState(str, Enum):
     STOPPING = "stopping"
     STOPPED = "stopped"
     ERROR = "error"
-
-
-def _reject_constant(value: str) -> NoReturn:
-    raise DeviceMessageError(f"non-finite JSON number is not allowed: {value}")
-
-
-def _unique_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
-    result: dict[str, Any] = {}
-    for key, value in pairs:
-        if key in result:
-            raise DeviceMessageError(f"duplicate JSON field: {key}")
-        result[key] = value
-    return result
-
-
-def _decode_payload(payload: bytes) -> dict[str, Any]:
-    if not payload:
-        raise DeviceMessageError("device payload must not be empty")
-    if len(payload) > MAX_DEVICE_MESSAGE_BYTES:
-        raise DeviceMessageError(
-            f"device payload exceeds {MAX_DEVICE_MESSAGE_BYTES} bytes"
-        )
-    try:
-        text = payload.decode("utf-8")
-        value = json.loads(
-            text,
-            parse_constant=_reject_constant,
-            object_pairs_hook=_unique_object,
-        )
-    except UnicodeDecodeError as exc:
-        raise DeviceMessageError("device payload must be UTF-8") from exc
-    except DeviceMessageError:
-        raise
-    except (json.JSONDecodeError, RecursionError, ValueError) as exc:
-        raise DeviceMessageError("device payload must be valid JSON") from exc
-    if not isinstance(value, dict):
-        raise DeviceMessageError("device payload must be a JSON object")
-    _validate_json_shape(value)
-    return value
-
-
-def _validate_json_shape(value: Any) -> None:
-    remaining = MAX_JSON_NODES
-
-    def visit(item: Any, depth: int) -> None:
-        nonlocal remaining
-        remaining -= 1
-        if remaining < 0:
-            raise DeviceMessageError(f"device JSON exceeds {MAX_JSON_NODES} values")
-        if depth > MAX_JSON_DEPTH:
-            raise DeviceMessageError(f"device JSON exceeds depth {MAX_JSON_DEPTH}")
-        if isinstance(item, dict):
-            for child in item.values():
-                visit(child, depth + 1)
-        elif isinstance(item, list):
-            for child in item:
-                visit(child, depth + 1)
-
-    visit(value, 0)
-
-
-def _required_string(
-    payload: dict[str, Any],
-    field: str,
-    *,
-    maximum: int,
-) -> str:
-    value = payload.get(field)
-    if not isinstance(value, str) or not value.strip():
-        raise DeviceMessageError(f"{field} must be a non-empty string")
-    normalized = value.strip()
-    if len(normalized) > maximum:
-        raise DeviceMessageError(f"{field} exceeds {maximum} characters")
-    return normalized
-
-
-def _optional_external_id(payload: dict[str, Any]) -> str | None:
-    if "id" not in payload:
-        return None
-    return _required_string(payload, "id", maximum=128)
 
 
 def _identity(topic: str, payload: dict[str, Any]) -> str:
@@ -152,232 +67,17 @@ def _identity(topic: str, payload: dict[str, Any]) -> str:
     return device_id
 
 
-def _base_payload(
-    device_id: str,
-    external_message_id: str | None,
-) -> dict[str, JsonValue]:
-    result: dict[str, JsonValue] = {
-        "device_id": device_id,
-        "mac": device_id,
-        "transport": "mqtt",
-    }
-    if external_message_id is not None:
-        result["external_message_id"] = external_message_id
-    return result
-
-
-def _message(
-    *,
-    device_id: str,
-    topic: str,
-    kind: MessageKind,
-    payload: dict[str, JsonValue],
-    correlation_id: str | None = None,
-) -> Message:
-    return Message.create(
-        topic=topic,
-        kind=kind,
-        source=f"device:{device_id}:mqtt",
-        target=f"device:{device_id}",
-        payload=payload,
-        correlation_id=correlation_id,
-    )
-
-
-def _hello(device_id: str, value: dict[str, Any]) -> Message:
-    protocol = _required_string(value, "protocol", maximum=32)
-    if protocol != "otto-mqtt/1":
-        raise DeviceMessageError("unsupported device MQTT protocol")
-    if "mac" not in value:
-        raise DeviceMessageError("hello must include mac")
-    name = _required_string(value, "name", maximum=80)
-    firmware_version = _required_string(value, "firmware_version", maximum=80)
-    capabilities = value.get("capabilities", {})
-    if not isinstance(capabilities, dict):
-        raise DeviceMessageError("capabilities must be an object")
-    payload = _base_payload(device_id, _optional_external_id(value))
-    payload.update(
-        {
-            "protocol": protocol,
-            "name": name,
-            "device_name": name,
-            "firmware_version": firmware_version,
-            "capabilities": cast(dict[str, JsonValue], capabilities),
-        }
-    )
-    ip_address = value.get("ip_address")
-    if ip_address is not None:
-        if not isinstance(ip_address, str):
-            raise DeviceMessageError("ip_address must be a string")
-        try:
-            payload["ip_address"] = str(ipaddress.ip_address(ip_address.strip()))
-        except ValueError as exc:
-            raise DeviceMessageError("ip_address is invalid") from exc
-    return _message(
-        device_id=device_id,
-        topic="device.connected",
-        kind=MessageKind.EVENT,
-        payload=payload,
-    )
-
-
-def _heartbeat(device_id: str, value: dict[str, Any]) -> Message:
-    payload = _base_payload(device_id, _optional_external_id(value))
-    return _message(
-        device_id=device_id,
-        topic="device.heartbeat.received",
-        kind=MessageKind.EVENT,
-        payload=payload,
-    )
-
-
-def _runtime_action(value: dict[str, Any]) -> tuple[Any, Any]:
-    state = value.get("action_state")
-    action_name = value.get("current_action")
-    runtime = value.get("runtime")
-    if isinstance(runtime, dict):
-        otto = runtime.get("otto")
-        if isinstance(otto, dict):
-            action = otto.get("action")
-            if isinstance(action, dict):
-                state = action.get("state", state)
-                action_name = action.get("name", action_name)
-    return state, action_name
-
-
-def _state(device_id: str, value: dict[str, Any]) -> Message:
-    action_state, current_action = _runtime_action(value)
-    if action_state not in {"unknown", "idle", "moving"}:
-        raise DeviceMessageError("state must contain a known action state")
-    if current_action is not None and (
-        not isinstance(current_action, str) or not current_action.strip()
-    ):
-        raise DeviceMessageError("current action must be a non-empty string or null")
-    normalized_action = current_action.strip() if isinstance(current_action, str) else None
-    if normalized_action is not None and len(normalized_action) > 80:
-        raise DeviceMessageError("current action exceeds 80 characters")
-    payload = _base_payload(device_id, _optional_external_id(value))
-    payload["action_state"] = cast(str, action_state)
-    payload["current_action"] = normalized_action
-    return _message(
-        device_id=device_id,
-        topic="device.state.received",
-        kind=MessageKind.STATE,
-        payload=payload,
-        correlation_id=_optional_external_id(value),
-    )
-
-
-def _actions(device_id: str, value: dict[str, Any]) -> Message:
-    raw_actions = value.get("actions")
-    if not isinstance(raw_actions, list):
-        raise DeviceMessageError("actions must be a list")
-    if len(raw_actions) > MAX_DEVICE_ACTIONS:
-        raise DeviceMessageError(f"actions exceeds {MAX_DEVICE_ACTIONS} entries")
-    actions: list[dict[str, JsonValue]] = []
-    names: set[str] = set()
-    for item in raw_actions:
-        if isinstance(item, str):
-            normalized: dict[str, JsonValue] = {"name": item.strip()}
-        elif isinstance(item, dict):
-            normalized = cast(dict[str, JsonValue], dict(item))
-        else:
-            raise DeviceMessageError("each action must be a string or object")
-        name = normalized.get("name")
-        if not isinstance(name, str) or not name.strip():
-            raise DeviceMessageError("each action must have a non-empty name")
-        name = name.strip()
-        if len(name) > 80:
-            raise DeviceMessageError("action name exceeds 80 characters")
-        if name in names:
-            raise DeviceMessageError(f"duplicate action name: {name}")
-        names.add(name)
-        normalized["name"] = name
-        actions.append(normalized)
-    payload = _base_payload(device_id, _optional_external_id(value))
-    payload["actions"] = cast(list[JsonValue], actions)
-    return _message(
-        device_id=device_id,
-        topic="device.actions.catalog.received",
-        kind=MessageKind.EVENT,
-        payload=payload,
-        correlation_id=_optional_external_id(value),
-    )
-
-
-def _ack(device_id: str, value: dict[str, Any], *, stop: bool) -> tuple[Message, ...]:
-    external_id = _required_string(value, "id", maximum=128)
-    ok = value.get("ok")
-    if not isinstance(ok, bool):
-        raise DeviceMessageError("ack ok must be a boolean")
-    payload = _base_payload(device_id, external_id)
-    payload["accepted"] = ok
-    payload["command_type"] = "stop" if stop else "action"
-    action = value.get("action")
-    if action is not None:
-        if not isinstance(action, str) or not action.strip() or len(action.strip()) > 80:
-            raise DeviceMessageError("ack action must be a valid action name")
-        payload["action"] = action.strip()
-    error = value.get("error")
-    if error is not None:
-        if not isinstance(error, str) or len(error) > 512:
-            raise DeviceMessageError("ack error must be a bounded string")
-        payload["error"] = error
-    if stop:
-        internal_topic = "robot.stop.accepted" if ok else "robot.stop.failed"
-    else:
-        internal_topic = "robot.action.accepted" if ok else "robot.action.failed"
-    messages = [
-        _message(
-            device_id=device_id,
-            topic=internal_topic,
-            kind=MessageKind.RESULT,
-            payload=payload,
-            correlation_id=external_id,
-        )
-    ]
-    action_state, _ = _runtime_action(value)
-    if action_state is not None:
-        messages.append(_state(device_id, value))
-    return tuple(messages)
-
-
-def _error(device_id: str, value: dict[str, Any]) -> Message:
-    external_id = _required_string(value, "id", maximum=128)
-    error = _required_string(value, "error", maximum=512)
-    payload = _base_payload(device_id, external_id)
-    payload.update({"accepted": False, "error": error})
-    return _message(
-        device_id=device_id,
-        topic="robot.action.failed",
-        kind=MessageKind.RESULT,
-        payload=payload,
-        correlation_id=external_id,
-    )
-
-
 def translate_device_message(topic: str, payload: bytes) -> tuple[Message, ...]:
     """Validate one untrusted uplink packet and return domain messages."""
 
-    value = _decode_payload(payload)
+    value = decode_device_json(payload)
     device_id = _identity(topic, value)
-    message_type = _required_string(value, "type", maximum=64)
-    translators = {
-        "hello": _hello,
-        "heartbeat": _heartbeat,
-        "otto_state": _state,
-        "otto_actions": _actions,
-    }
-    translator = translators.get(message_type)
-    if translator is not None:
-        return (translator(device_id, value),)
-    if message_type == "otto_action_ack":
-        return _ack(device_id, value, stop=False)
-    if message_type == "otto_stop_ack":
-        return _ack(device_id, value, stop=True)
-    if message_type == "error":
-        return (_error(device_id, value),)
-    raise DeviceMessageError(f"unsupported device message type: {message_type}")
+    return translate_otto_value(
+        device_id,
+        value,
+        transport="mqtt",
+        hello_protocol="otto-mqtt/1",
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -388,97 +88,15 @@ class EncodedDeviceCommand:
     external_id: str
 
 
-def _outbound_device_id(message: Message) -> str:
-    device_id_value = message.payload.get("device_id")
-    if not isinstance(device_id_value, str):
-        raise DeviceMessageError("outbound command requires device_id")
-    try:
-        device_id = normalize_device_id(device_id_value)
-    except ValueError as exc:
-        raise DeviceMessageError("outbound command has invalid device_id") from exc
-    if message.target != f"device:{device_id}":
-        raise DeviceMessageError("outbound command target does not match device_id")
-    return device_id
-
-
-def _outbound_command_id(message: Message) -> str:
-    command_id = message.payload.get("command_id")
-    if not isinstance(command_id, str) or not command_id.strip():
-        raise DeviceMessageError("outbound action or stop requires command_id")
-    command_id = command_id.strip()
-    if len(command_id) > 128:
-        raise DeviceMessageError("outbound command ID exceeds 128 characters")
-    if message.correlation_id != command_id:
-        raise DeviceMessageError("outbound command correlation does not match command_id")
-    return command_id
-
-
-def _action_payload(message: Message, command_id: str) -> dict[str, JsonValue]:
-    action = message.payload.get("action")
-    if not isinstance(action, str) or not action.strip() or len(action.strip()) > 80:
-        raise DeviceMessageError("outbound action requires a valid action name")
-    parameters = message.payload.get("parameters", {})
-    if not isinstance(parameters, dict):
-        raise DeviceMessageError("outbound action parameters must be an object")
-    if len(parameters) > MAX_ACTION_PARAMETERS:
-        raise DeviceMessageError(
-            f"outbound action exceeds {MAX_ACTION_PARAMETERS} parameters"
-        )
-    external: dict[str, JsonValue] = {
-        "type": "otto_action",
-        "id": command_id,
-        "action": action.strip(),
-    }
-    for name, value in parameters.items():
-        normalized_name = name.strip() if isinstance(name, str) else ""
-        if (
-            not isinstance(name, str)
-            or not normalized_name
-            or len(normalized_name) > 64
-            or normalized_name in _ACTION_RESERVED_FIELDS
-            or normalized_name in external
-        ):
-            raise DeviceMessageError("outbound action contains an invalid parameter name")
-        external[normalized_name] = value
-    return external
-
-
 def encode_device_command(message: Message) -> EncodedDeviceCommand:
     """Encode an allow-listed internal command for one exact MQTT down topic."""
 
-    if message.topic not in _OUTBOUND_COMMAND_TOPICS or message.kind is not MessageKind.COMMAND:
-        raise DeviceMessageError("unsupported outbound device command")
-    device_id = _outbound_device_id(message)
-    external_type = _QUERY_TYPES.get(message.topic)
-    if external_type is not None:
-        external_id = message.message_id
-        if len(external_id) > 128:
-            raise DeviceMessageError("outbound command ID exceeds 128 characters")
-        external_payload: dict[str, JsonValue] = {
-            "type": external_type,
-            "id": external_id,
-        }
-    else:
-        external_id = _outbound_command_id(message)
-        external_payload = (
-            _action_payload(message, external_id)
-            if message.topic == _ACTION_COMMAND_TOPIC
-            else {"type": "stop", "id": external_id}
-        )
-    payload = json.dumps(
-        external_payload,
-        ensure_ascii=False,
-        separators=(",", ":"),
-    ).encode("utf-8")
-    if len(payload) > MAX_DEVICE_MESSAGE_BYTES:
-        raise DeviceMessageError(
-            f"outbound command exceeds {MAX_DEVICE_MESSAGE_BYTES} bytes"
-        )
+    encoded = encode_otto_command(message, transport="mqtt")
     return EncodedDeviceCommand(
-        device_id=device_id,
-        topic=f"otto/v1/devices/{device_id}/down",
-        payload=payload,
-        external_id=external_id,
+        device_id=encoded.device_id,
+        topic=f"otto/v1/devices/{encoded.device_id}/down",
+        payload=encoded.payload,
+        external_id=encoded.external_id,
     )
 
 
@@ -533,7 +151,7 @@ class DeviceMqttGateway:
             self._last_error = f"{type(exc).__name__}: {exc}"
             self._state = DeviceMqttState.ERROR
             raise DeviceMqttError("failed to connect MQTT device gateway") from exc
-        for topic in _OUTBOUND_COMMAND_TOPICS:
+        for topic in OUTBOUND_COMMAND_TOPICS:
             subscription_id = await self.message_bus.subscribe(topic, self._publish_command)
             self._command_subscription_ids.append(subscription_id)
         self._receive_task = asyncio.create_task(
@@ -690,6 +308,8 @@ class DeviceMqttGateway:
             )
 
     async def _publish_command(self, message: Message) -> None:
+        if message.payload.get("transport") != "mqtt":
+            return
         try:
             command = encode_device_command(message)
         except DeviceMessageError as exc:

@@ -189,7 +189,7 @@ def test_encodes_only_allowlisted_read_only_queries_to_exact_down_topic() -> Non
         source="device_verifier",
         target="device:aabbccddeeff",
         message_id="actions-1",
-        payload={"device_id": "aabbccddeeff"},
+        payload={"device_id": "aabbccddeeff", "transport": "mqtt"},
     )
     assert json.loads(encode_device_command(actions).payload)["type"] == "otto_actions"
 
@@ -203,6 +203,7 @@ def test_encodes_dispatcher_action_and_stop_with_command_id() -> None:
         correlation_id="command-1",
         payload={
             "device_id": "aabbccddeeff",
+            "transport": "mqtt",
             "command_id": "command-1",
             "action": "swing",
             "parameters": {"steps": 2, "speed": 1000},
@@ -214,7 +215,11 @@ def test_encodes_dispatcher_action_and_stop_with_command_id() -> None:
         source="dispatcher",
         target="device:aabbccddeeff",
         correlation_id="stop-1",
-        payload={"device_id": "aabbccddeeff", "command_id": "stop-1"},
+        payload={
+            "device_id": "aabbccddeeff",
+            "transport": "mqtt",
+            "command_id": "stop-1",
+        },
     )
 
     encoded_action = encode_device_command(action)
@@ -242,6 +247,7 @@ def test_action_encoder_rejects_reserved_or_normalized_duplicate_parameters() ->
             correlation_id="command-1",
             payload={
                 "device_id": "aabbccddeeff",
+                "transport": "mqtt",
                 "command_id": "command-1",
                 "action": "swing",
                 "parameters": parameters,

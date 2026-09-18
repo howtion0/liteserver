@@ -67,10 +67,17 @@ device.verification.completed
 audio.input.started
 audio.input.frame
 audio.input.finished
+audio.output.frame
+voice.transcription.partial
 voice.transcription.completed
+voice.transcription.failed
 voice.wake.accepted
 voice.wake.rejected
 voice.command.window.opened
+tts.synthesis.requested
+tts.synthesis.started
+tts.synthesis.completed
+tts.synthesis.failed
 tts.playback.requested
 tts.playback.finished
 robot.action.requested
@@ -119,7 +126,7 @@ voice.wake.candidate.received
 
 反向发送同理：Dispatcher发布领域动作，Device Gateway负责生成ESP32理解的JSON。
 
-MQTT外部Topic和JSON合同见 `docs/MQTT_CONTROL_CONTRACT.md`。Gateway转换后至少补充以下稳定字段：
+MQTT外部Topic和JSON合同见 `docs/MQTT_CONTROL_CONTRACT.md`，三传输共享边界见 `docs/DEVICE_TRANSPORT_CONTRACT.md`。Gateway转换后至少补充以下稳定字段：
 
 ```json
 {
@@ -135,9 +142,31 @@ MQTT外部Topic和JSON合同见 `docs/MQTT_CONTROL_CONTRACT.md`。Gateway转换�
 ## 7. 音频消息
 
 - WebSocket二进制Opus帧不进行JSON Base64编码。
-- 普通消息只携带帧元数据或内存引用ID。
+- MQTT Profile的连续Opus使用固件现有加密UDP数据面，不进入MQTT控制Topic。
+- 普通消息只携带帧元数据或短期内存 `frame_ref`，不携带PCM、Opus或Base64音频。
 - 默认不将原始音频写入消息日志或SQLite。
 - 音频缓冲必须有设备归属、大小上限和生命周期。
+- 音频引用必须同时核对 `device_id`、`utterance_id` 和帧序号；过期、跨设备、重复、缺失或倒序引用失败关闭。
+- `tts.synthesis.completed`只表示云合成和Opus编码完成；只有设备完成证据才能产生`tts.playback.finished`。
+
+`audio.input.frame` 的最小payload：
+
+```json
+{
+  "device_id": "aabbccddeeff",
+  "utterance_id": "utt-uuid",
+  "frame_ref": "audio-ref-uuid",
+  "sequence": 42,
+  "codec": "opus",
+  "sample_rate": 16000,
+  "channels": 1,
+  "frame_duration_ms": 60
+}
+```
+
+转写结果必须包含 `device_id`、`utterance_id`、规范化 `text` 和 `is_final`。Provider名称、请求ID和延迟可作为观测字段；Provider原始响应、认证头和音频不得进入普通消息。
+
+TTS使用两层状态：`tts.synthesis.*`描述云合成，`tts.playback.*`描述设备播放。`audio.output.frame`只携带目标设备、会话、序号、音频参数和 `frame_ref`。完整Phase 5合同见 `docs/VOLCENGINE_SPEECH_INTEGRATION.md`。
 
 ## 8. 兼容性
 
@@ -163,3 +192,7 @@ Phase 4A实现说明：Gateway已生成`device.connected`、`device.heartbeat.re
 Phase 4B实现说明：Verifier发布`device.state.query.requested`和`device.actions.query.requested`；Gateway只将这两个白名单命令编码为精确设备down消息，并生成`device.command.published|failed`。设备响应的外部`id`进入内部`correlation_id`，Verifier再同时核对响应topic和target。该检查点当时尚未实现动作命令的完整持久关联，已由Phase 4C补齐。
 
 Phase 4C实现说明：Dispatcher消费`robot.action.requested|robot.stop.requested`，持久命令后发布`device.action.execute.requested|device.stop.execute.requested`。Gateway只对这两个专用topic编码外部动作/stop，且外部`id`必须等于持久command ID。ACK映射为`robot.action.accepted|robot.stop.accepted`，只有同关联链的moving与idle事实才推进终态。重复ID同载荷幂等，冲突载荷拒绝。
+
+Phase 4D实现说明：MQTT、TCP和WebSocket使用同一严格协议翻译器，所有设备事实和下行请求都携带`transport`。Session按`mqtt → websocket → tcp`选择首选传输并隔离各transport的Profile；Verifier同时核对响应transport，Dispatcher把接受命令时的transport写入持久payload。每个Gateway只处理与自身transport一致的请求，传输切换或对应Gateway不可用使在途命令进入`disconnected`，不得从另一传输重放。
+
+Xiaozhi WebSocket v1的`listen/start`、二进制帧、`listen/stop|abort`依次映射为`audio.input.started`、`audio.input.frame`、`audio.input.finished`。帧消息只携带`device_id + utterance_id + sequence + frame_ref`及格式元数据；取帧时四项必须全部匹配，原始Opus不进入普通Message或SQLite。

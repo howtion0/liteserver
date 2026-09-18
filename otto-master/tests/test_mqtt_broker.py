@@ -145,6 +145,9 @@ async def test_credentials_are_stable_and_not_exposed_by_repr(tmp_path: Path) ->
     await broker.start()
     first = await broker.provision_device("aa:bb:cc:dd:ee:ff")
     second = await broker.provision_device("aabbccddeeff")
+    assert broker.credentials.authenticate_device_token("aa:bb:cc:dd:ee:ff", first.password)
+    assert not broker.credentials.authenticate_device_token("aabbccddeeff", "wrong-token")
+    assert broker.credentials.expected_device_client_id("aabbccddeeff") == first.client_id
     await broker.shutdown()
 
     assert first == second

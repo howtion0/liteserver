@@ -20,7 +20,12 @@ def _device_message(topic: str, payload: dict[str, JsonValue]) -> Message:
         kind=MessageKind.EVENT,
         source=f"device:{DEVICE_ID}:mqtt",
         target=f"device:{DEVICE_ID}",
-        payload={"device_id": DEVICE_ID, "mac": DEVICE_ID, **payload},
+        payload={
+            "device_id": DEVICE_ID,
+            "mac": DEVICE_ID,
+            "transport": "mqtt",
+            **payload,
+        },
     )
 
 
@@ -154,6 +159,22 @@ async def test_verifier_ignores_wrong_target_and_times_out_without_leaking_pendi
                     "device_id": "aabbccddee02",
                     "mac": "aabbccddee02",
                     "transport": "mqtt",
+                    "action_state": "idle",
+                    "current_action": None,
+                },
+            )
+        )
+        await bus.publish(
+            Message.create(
+                topic="device.state.received",
+                kind=MessageKind.STATE,
+                source=f"device:{DEVICE_ID}:websocket",
+                target=message.target,
+                correlation_id=message.message_id,
+                payload={
+                    "device_id": DEVICE_ID,
+                    "mac": DEVICE_ID,
+                    "transport": "websocket",
                     "action_state": "idle",
                     "current_action": None,
                 },

@@ -56,6 +56,27 @@ class DispatchConfig:
 
 
 @dataclass(frozen=True, slots=True)
+class TcpConfig:
+    enabled: bool
+    host: str
+    port: int
+    max_connections: int
+    hello_timeout_seconds: float
+    write_timeout_seconds: float
+    max_frame_bytes: int
+
+
+@dataclass(frozen=True, slots=True)
+class DeviceWebsocketConfig:
+    enabled: bool
+    hello_timeout_seconds: float
+    heartbeat_seconds: float
+    max_connections: int
+    max_frame_bytes: int
+    audio_buffer_frames_per_device: int
+
+
+@dataclass(frozen=True, slots=True)
 class RuntimeConfig:
     message_queue_size: int
     worker_threads: int
@@ -142,6 +163,8 @@ class AppConfig:
     server: ServerConfig
     mqtt: MqttConfig
     dispatch: DispatchConfig
+    tcp: TcpConfig
+    device_websocket: DeviceWebsocketConfig
     runtime: RuntimeConfig
     discovery: DiscoveryConfig
     database: DatabaseConfig
@@ -191,12 +214,34 @@ def _string(section: Mapping[str, Any], name: str, path: str, *, allow_empty: bo
     return value
 
 
-def _int(section: Mapping[str, Any], name: str, path: str, *, minimum: int | None = None) -> int:
+def _int(
+    section: Mapping[str, Any],
+    name: str,
+    path: str,
+    *,
+    minimum: int | None = None,
+    maximum: int | None = None,
+) -> int:
     value = section.get(name)
     if isinstance(value, bool) or not isinstance(value, int):
         raise ConfigError(f"{path}.{name} must be an integer")
     if minimum is not None and value < minimum:
         raise ConfigError(f"{path}.{name} must be at least {minimum}")
+    if maximum is not None and value > maximum:
+        raise ConfigError(f"{path}.{name} must be at most {maximum}")
+    return value
+
+
+def _port(section: Mapping[str, Any], name: str, path: str) -> int:
+    return _int(section, name, path, minimum=1, maximum=65535)
+
+
+def _websocket_path(section: Mapping[str, Any]) -> str:
+    value = _string(section, "websocket_path", "server")
+    if not value.startswith("/") or "?" in value or "#" in value:
+        raise ConfigError("server.websocket_path must be an absolute URL path")
+    if value == "/api/v1/events/stream":
+        raise ConfigError("server.websocket_path conflicts with the console event stream")
     return value
 
 
@@ -304,6 +349,8 @@ def load_config(
     server = _section(root, "server")
     mqtt = _section(root, "mqtt")
     dispatch = _section(root, "dispatch")
+    tcp = _section(root, "tcp")
+    device_websocket = _section(root, "device_websocket")
     runtime = _section(root, "runtime")
     discovery = _section(root, "discovery")
     database = _section(root, "database")
@@ -337,15 +384,15 @@ def load_config(
         server=ServerConfig(
             enabled=_bool(server, "enabled", "server"),
             host=_string(server, "host", "server"),
-            port=_int(server, "port", "server", minimum=1),
-            websocket_path=_string(server, "websocket_path", "server"),
+            port=_port(server, "port", "server"),
+            websocket_path=_websocket_path(server),
             console_token_env=console_token_env,
             allowed_origins=_string_list(server, "allowed_origins", "server"),
         ),
         mqtt=MqttConfig(
             enabled=_bool(mqtt, "enabled", "mqtt"),
             host=_string(mqtt, "host", "mqtt"),
-            port=_int(mqtt, "port", "mqtt", minimum=1),
+            port=_port(mqtt, "port", "mqtt"),
             max_connections=_int(mqtt, "max_connections", "mqtt", minimum=1),
             credentials_path=_string(mqtt, "credentials_path", "mqtt"),
             master_username=_string(mqtt, "master_username", "mqtt"),
@@ -371,6 +418,52 @@ def load_config(
             ),
             state_query_interval_seconds=_float(
                 dispatch, "state_query_interval_seconds", "dispatch", minimum=0.05
+            ),
+        ),
+        tcp=TcpConfig(
+            enabled=_bool(tcp, "enabled", "tcp"),
+            host=_string(tcp, "host", "tcp"),
+            port=_port(tcp, "port", "tcp"),
+            max_connections=_int(tcp, "max_connections", "tcp", minimum=1),
+            hello_timeout_seconds=_float(
+                tcp, "hello_timeout_seconds", "tcp", minimum=0.1
+            ),
+            write_timeout_seconds=_float(
+                tcp, "write_timeout_seconds", "tcp", minimum=0.1
+            ),
+            max_frame_bytes=_int(
+                tcp, "max_frame_bytes", "tcp", minimum=256, maximum=1024 * 1024
+            ),
+        ),
+        device_websocket=DeviceWebsocketConfig(
+            enabled=_bool(device_websocket, "enabled", "device_websocket"),
+            hello_timeout_seconds=_float(
+                device_websocket,
+                "hello_timeout_seconds",
+                "device_websocket",
+                minimum=0.1,
+            ),
+            heartbeat_seconds=_float(
+                device_websocket,
+                "heartbeat_seconds",
+                "device_websocket",
+                minimum=0.1,
+            ),
+            max_connections=_int(
+                device_websocket, "max_connections", "device_websocket", minimum=1
+            ),
+            max_frame_bytes=_int(
+                device_websocket,
+                "max_frame_bytes",
+                "device_websocket",
+                minimum=256,
+                maximum=1024 * 1024,
+            ),
+            audio_buffer_frames_per_device=_int(
+                device_websocket,
+                "audio_buffer_frames_per_device",
+                "device_websocket",
+                minimum=1,
             ),
         ),
         runtime=RuntimeConfig(

@@ -484,6 +484,10 @@ async def test_provisioning_returns_scoped_credentials_only_on_protected_endpoin
             assert body["mqtt"]["publish_topic"] == "otto/v1/devices/aabbccddeeff/up"
             assert body["mqtt"]["subscribe_topic"] == "otto/v1/devices/aabbccddeeff/down"
             assert body["mqtt"]["password"]
+            assert body["tcp"]["protocol"] == "otto-master/1"
+            assert body["tcp"]["token"] == body["mqtt"]["password"]
+            assert body["websocket"]["protocol_version"] == 1
+            assert body["websocket"]["token"] == body["mqtt"]["password"]
             assert provisioned.headers["cache-control"] == "no-store"
 
             settings = await client.get("/api/v1/settings")
