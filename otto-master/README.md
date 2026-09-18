@@ -4,7 +4,7 @@ Otto Master 是一个面向 Otto 机器人集群的跨平台 Python Runtime。�
 
 ## 当前状态
 
-当前为 **Phase 4A / 0.4.0 已通过本地及macOS/Windows探针**：在Phase 3网络基座上，已接入Master MQTT Gateway、严格上行协议翻译、Device Session在线状态、设备/动作持久化和实时只读API；两个fake设备已通过真实内嵌Broker联调。MQTT下行动作闭环、TCP/WebSocket兼容、语音云服务和EVA真机接入仍属于后续检查点。
+当前为 **Phase 4B / 0.4.1 本地与 macOS/Windows 跨平台探针通过**：已接入Master MQTT Gateway、Device Session和只读双向连接验证；两个fake设备通过真实内嵌Broker完成精确状态/动作目录查询、ID关联、隔离和超时路径。MQTT动作/stop闭环、TCP/WebSocket兼容、语音云服务和EVA真机接入仍属于后续检查点。
 
 ## 核心架构
 

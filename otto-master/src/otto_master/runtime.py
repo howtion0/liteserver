@@ -15,6 +15,7 @@ from typing import Any, Self
 
 from .config import AppConfig
 from .devices.manager import DeviceManager
+from .devices.verifier import DeviceVerifier
 from .gateways.device_mqtt import DeviceMqttGateway
 from .gateways.mdns import MdnsError, MdnsGateway
 from .gateways.mqtt_broker import EmbeddedMqttBroker
@@ -61,6 +62,13 @@ class Runtime:
             self.mqtt_broker,
             self.message_bus,
         )
+        self.device_verifier = DeviceVerifier(
+            self.message_bus,
+            self.device_manager,
+            broker_status=self.mqtt_broker.status,
+            gateway_status=self.device_mqtt.status,
+            timeout_seconds=config.mqtt.query_timeout_seconds,
+        )
         self.mdns = MdnsGateway(
             config.discovery,
             http_port=config.server.port,
@@ -77,6 +85,7 @@ class Runtime:
                 mqtt_broker=self.mqtt_broker,
                 events=self.events,
                 devices=self.device_manager,
+                verifier=self.device_verifier,
                 component_status=self.component_status,
                 started_at=self._started_at,
                 started_monotonic=self._started_monotonic,
@@ -113,6 +122,7 @@ class Runtime:
             )
             await self.mqtt_broker.start()
             await self.device_manager.start()
+            await self.device_verifier.start()
             await self.device_mqtt.start()
             await self.web.start()
             try:
@@ -173,6 +183,7 @@ class Runtime:
         try:
             await self._stop_with_timeout(self.mdns.shutdown(), "mDNS")
             await self._stop_with_timeout(self.web.shutdown(), "web gateway")
+            await self._stop_with_timeout(self.device_verifier.shutdown(), "device verifier")
             await self._stop_with_timeout(self.device_mqtt.shutdown(), "MQTT device gateway")
             await self._stop_with_timeout(self.message_bus.drain(), "message bus drain")
             await self._stop_with_timeout(self.device_manager.shutdown(), "device manager")
@@ -219,6 +230,7 @@ class Runtime:
                 "state": "running" if self.device_manager.running else "stopped",
                 "devices": self.device_manager.device_count,
             },
+            "device_verifier": self.device_verifier.status(),
             "web": self.web.status(),
             "mdns": self.mdns.status(),
             "ota": {
@@ -241,6 +253,7 @@ class Runtime:
         try:
             await self._stop_with_timeout(self.mdns.shutdown(), "mDNS")
             await self._stop_with_timeout(self.web.shutdown(), "web gateway")
+            await self._stop_with_timeout(self.device_verifier.shutdown(), "device verifier")
             await self._stop_with_timeout(self.device_mqtt.shutdown(), "MQTT device gateway")
             await self._stop_with_timeout(self.message_bus.drain(), "message bus drain")
             await self._stop_with_timeout(self.device_manager.shutdown(), "device manager")

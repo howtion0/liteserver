@@ -221,6 +221,14 @@ Config / Logging / MessageBus / Storage
 - Device Manager维护唯一MAC Session及connecting/online/stale/offline/error连接状态；Gateway不可用时不会继续显示online。
 - 本检查点不发布`down`消息，不代表动作、stop、命令ID去重或EVA真机MQTT通过。
 
+### Phase 4B已实现边界
+
+- 只读验证经Message Bus请求，Gateway仅接受状态查询和动作目录查询两个内部白名单topic。
+- 每条请求使用内部Message ID作为外部`id`，发布到精确`otto/v1/devices/{device_id}/down`，QoS 0且`retain=false`。
+- `otto_state`和`otto_actions`返回相同`id`后映射为内部`correlation_id`；ID、响应topic或device target任一不匹配均不能完成等待。
+- 验证报告同时要求Broker/Gateway健康、Session online、实际传输为mqtt、存在心跳及state/actions能力，并记录查询命令ID、延迟与动作数量。
+- 本检查点不允许Browser发送任意Topic/JSON，也不发布动作或stop；因此仍不代表动作闭环或EVA真机通过。
+
 ## 10. EVA1/EVA2真机验收
 
 已知环境基线：

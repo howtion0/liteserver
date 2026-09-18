@@ -7,9 +7,10 @@ import pytest
 from otto_master.gateways.device_mqtt import (
     MAX_DEVICE_MESSAGE_BYTES,
     DeviceMessageError,
+    encode_device_command,
     translate_device_message,
 )
-from otto_master.messages import Message
+from otto_master.messages import Message, MessageKind
 
 TOPIC = "otto/v1/devices/aabbccddeeff/up"
 
@@ -133,3 +134,63 @@ def test_rejects_duplicate_fields_non_utf8_and_oversized_payloads() -> None:
                 "capabilities": deeply_nested,
             }
         )
+
+
+def test_encodes_only_allowlisted_read_only_queries_to_exact_down_topic() -> None:
+    command = Message.create(
+        topic="device.state.query.requested",
+        kind=MessageKind.COMMAND,
+        source="device_verifier",
+        target="device:aabbccddeeff",
+        message_id="query-1",
+        payload={"device_id": "aabbccddeeff", "transport": "mqtt"},
+    )
+
+    encoded = encode_device_command(command)
+
+    assert encoded.device_id == "aabbccddeeff"
+    assert encoded.topic == "otto/v1/devices/aabbccddeeff/down"
+    assert json.loads(encoded.payload) == {"type": "otto_query", "id": "query-1"}
+
+    actions = Message.create(
+        topic="device.actions.query.requested",
+        kind=MessageKind.COMMAND,
+        source="device_verifier",
+        target="device:aabbccddeeff",
+        message_id="actions-1",
+        payload={"device_id": "aabbccddeeff"},
+    )
+    assert json.loads(encode_device_command(actions).payload)["type"] == "otto_actions"
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        Message.create(
+            topic="robot.action.requested",
+            kind=MessageKind.COMMAND,
+            source="test",
+            target="device:aabbccddeeff",
+            payload={"device_id": "aabbccddeeff", "action": "walk"},
+        ),
+        Message.create(
+            topic="device.state.query.requested",
+            kind=MessageKind.COMMAND,
+            source="test",
+            target="device:aabbccddee00",
+            payload={"device_id": "aabbccddeeff"},
+        ),
+        Message.create(
+            topic="device.state.query.requested",
+            kind=MessageKind.EVENT,
+            source="test",
+            target="device:aabbccddeeff",
+            payload={"device_id": "aabbccddeeff"},
+        ),
+    ],
+)
+def test_outbound_encoder_rejects_actions_cross_target_and_non_commands(
+    message: Message,
+) -> None:
+    with pytest.raises(DeviceMessageError):
+        encode_device_command(message)

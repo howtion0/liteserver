@@ -31,6 +31,7 @@ async def smoke() -> None:
             heartbeat_stale_seconds=15,
             heartbeat_offline_seconds=30,
             gateway_reconnect_seconds=2,
+            query_timeout_seconds=3,
         )
         broker = EmbeddedMqttBroker(
             config,

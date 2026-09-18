@@ -2,7 +2,7 @@
 
 ## 当前版本
 
-版本以 `pyproject.toml` 为准，当前为 `0.4.0`。
+版本以 `pyproject.toml` 为准，当前为 `0.4.1`。
 
 ## Git迭代
 
@@ -10,6 +10,8 @@
 - Phase 2支线 `test0.2` 已推送，远程哈希为 `cf2bc419810df69cfa92dea0fa32df613d85fecd`。
 - Phase 3支线 `test0.3` 已推送，远程哈希为 `7fbb368569f162aa135c197438aabfbe861474c4`；最终run `35299643584`的macOS/Windows jobs均PASS。
 - Phase 4A本轮支线为 `test0.4`，明确从已验收的 `test0.3` 继续；跨平台探针run `35300950492`的macOS/Windows jobs均PASS。
+- Phase 4A最终支线 `test0.4` 已推送，远程哈希为 `3d46780a89f2c1955f673ccfbad349b8f342c941`；最终run `35301297710`的macOS/Windows jobs均PASS。
+- Phase 4B本轮支线为 `test0.5`，从已验收的 `test0.4` 继续；跨平台探针run `35303748098`的macOS/Windows jobs均PASS。
 - 此后每个阶段或补充检查点使用下一个 `testN.N` 编号。
 - 支线编号与产品版本分别记录，互不驱动。
 
@@ -21,14 +23,14 @@
 | Phase 1 Runtime与Message Bus | 已完成 |
 | Phase 2 SQLite | 已完成 |
 | Phase 3 Web/OTA/mDNS/Embedded MQTT Broker | 已完成 |
-| Phase 4 MQTT控制/TCP回退/WebSocket兼容 | 进行中；Phase 4A假设备只读上行闭环本地通过 |
+| Phase 4 MQTT控制/TCP回退/WebSocket兼容 | 进行中；Phase 4A上行与Phase 4B只读双向验证已通过当前门禁 |
 | Phase 5 Opus/ASR/TTS | 未开始 |
 | Phase 6 WakeGate | 未开始 |
 | Phase 7 LLM/Dispatcher/动作 | 未开始 |
 | Phase 8 集群/日志/容错 | 未开始 |
 | Phase 9 Windows打包 | 未开始 |
-| Python业务实现 | Phase 1-3网络基座及Phase 4A MQTT Gateway、Device Session、在线状态与只读API已实现 |
-| 自动测试 | 45通过；Ruff与mypy strict通过；Phase 4A macOS/Windows矩阵通过 |
+| Python业务实现 | Phase 1-3基座及Phase 4A/4B MQTT Session、精确查询与连接验证已实现 |
+| 自动测试 | 53通过；Ruff与mypy strict通过；Phase 4B macOS/Windows探针矩阵通过 |
 | 硬件验证 | 未运行 |
 
 ## 已完成
@@ -59,15 +61,21 @@
 - Phase 4A已把Web设备列表、详情和动作目录切到实时Manager快照；真实内嵌Broker测试中两个受保护OTA发放的fake设备同时上报hello、heartbeat、state和不同动作目录，状态和目录未串设备，且未收到任何动作下行。
 - Phase 4A本机通过`uv lock --check`、Ruff、mypy strict和45个pytest；Runtime关闭后HTTP/MQTT端口释放，v1数据库迁移与重启离线恢复通过。
 - Phase 4A GitHub Actions探针run `35300950492`：macOS job `105463270409`、Windows job `105463270272`均通过锁定安装、Ruff、mypy、45个测试、PyInstaller构建和Broker可执行文件实跑。
+- Phase 4A最终GitHub Actions run `35301297710`：macOS job `105464305839`、Windows job `105464305626`均success，最终SHA与远程分支一致。
+- Phase 4B已实现内部只读查询白名单、精确单设备down Topic编码、QoS 0/non-retain发布、发布成功/失败事件和出站指标；Browser API不能注入Topic或原始JSON。
+- Phase 4B已实现Device Verifier：检查Broker/Gateway、online Session、实际传输、心跳和能力后，依次发送状态/动作目录查询，同时按ID、响应topic和device target关联，支持超时、断线与关闭中断。
+- `POST /api/v1/devices/{device_id}/verify`已接入受保护控制面，返回逐步PASS/FAIL、命令ID、延迟、动作数量和失败原因；真实Broker双fake测试验证无跨设备下行。
+- Phase 4B本机通过锁文件、Ruff、mypy strict、53个pytest和前端语法检查；无响应验证按配置超时且pending清零。
+- Phase 4B GitHub Actions探针run `35303748098`：macOS job `105471585473`、Windows job `105471585595`均通过锁定安装、Ruff、mypy、53个测试、PyInstaller构建和Broker可执行文件实跑。
 
 ## 进行中
 
-- Phase 4A本地与macOS/Windows探针验收已通过；等待`test0.4`最终提交/push及远程哈希核对。
-- 完整Phase 4尚未完成：没有MQTT下行查询/动作、命令仓库、TCP回退、Xiaozhi WebSocket、固件hello/heartbeat/stop/去重或EVA真机结果。
+- Phase 4B本地与跨平台探针验收已通过；等待`test0.5`最终提交/push及精确SHA的正式矩阵核对。
+- 完整Phase 4尚未完成：没有动作/stop生命周期、命令仓库/队列、TCP回退、Xiaozhi WebSocket、固件hello/heartbeat/stop/去重或EVA真机结果。
 
 ## 下一步
 
-完成`test0.4`远程门禁后建立下一检查点：先实现fake设备可验证的只读下行查询与correlation链，再进入动作/stop、TCP回退和EVA1/EVA2真机安全验收。
+完成`test0.5`远程门禁后建立下一检查点：实现动作/stop命令仓库、每设备有序队列和`requested → published → accepted → moving → completed` fake闭环，再进入兼容传输和EVA真机安全验收。
 
 ## 已知风险
 
@@ -77,4 +85,4 @@
 - ESP32云端唤醒需要固件在休眠时通过VAD触发音频上传，服务端完成后仍需配套固件改造。
 - 固件2.0.5的MQTT入口缺少stop、独立hello/heartbeat和命令ID去重；Phase 4必须补齐后再启用QoS 1。
 - Windows真实局域网mDNS、防火墙提示和完整应用打包仍留给Phase 9实体Windows环境；本轮Windows CI已覆盖aMQTT认证/ACL、Runtime网络集成和Broker PyInstaller可执行文件。
-- fake设备在线状态和上行ACK翻译已实现；下行命令、accepted/moving/completed关联、Broker重启后设备自动恢复和真机固件能力仍属于后续Phase 4检查点。
+- fake设备双向只读验证已实现；动作accepted/moving/completed关联、Broker重启后设备自动恢复、真机固件能力和安全动作仍属于后续Phase 4检查点。

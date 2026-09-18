@@ -44,6 +44,7 @@ class MqttConfig:
     heartbeat_stale_seconds: float
     heartbeat_offline_seconds: float
     gateway_reconnect_seconds: float
+    query_timeout_seconds: float
 
 
 @dataclass(frozen=True, slots=True)
@@ -343,6 +344,9 @@ def load_config(
             heartbeat_offline_seconds=heartbeat_offline_seconds,
             gateway_reconnect_seconds=_float(
                 mqtt, "gateway_reconnect_seconds", "mqtt", minimum=0.1
+            ),
+            query_timeout_seconds=_float(
+                mqtt, "query_timeout_seconds", "mqtt", minimum=0.1
             ),
         ),
         runtime=RuntimeConfig(

@@ -7,6 +7,7 @@ import ipaddress
 import json
 import logging
 import re
+from dataclasses import dataclass
 from enum import Enum
 from typing import Any, NoReturn, cast
 from urllib.parse import quote
@@ -23,6 +24,10 @@ MAX_DEVICE_ACTIONS = 128
 MAX_JSON_DEPTH = 16
 MAX_JSON_NODES = 4096
 _UP_TOPIC = re.compile(r"^otto/v1/devices/(?P<device_id>[0-9a-f]{12})/up$")
+_QUERY_TYPES = {
+    "device.state.query.requested": "otto_query",
+    "device.actions.query.requested": "otto_actions",
+}
 
 
 class DeviceMqttError(RuntimeError):
@@ -254,6 +259,7 @@ def _state(device_id: str, value: dict[str, Any]) -> Message:
         topic="device.state.received",
         kind=MessageKind.STATE,
         payload=payload,
+        correlation_id=_optional_external_id(value),
     )
 
 
@@ -290,6 +296,7 @@ def _actions(device_id: str, value: dict[str, Any]) -> Message:
         topic="device.actions.catalog.received",
         kind=MessageKind.EVENT,
         payload=payload,
+        correlation_id=_optional_external_id(value),
     )
 
 
@@ -361,6 +368,42 @@ def translate_device_message(topic: str, payload: bytes) -> tuple[Message, ...]:
     raise DeviceMessageError(f"unsupported device message type: {message_type}")
 
 
+@dataclass(frozen=True, slots=True)
+class EncodedDeviceCommand:
+    device_id: str
+    topic: str
+    payload: bytes
+
+
+def encode_device_command(message: Message) -> EncodedDeviceCommand:
+    """Encode an allow-listed internal query for one exact MQTT down topic."""
+
+    external_type = _QUERY_TYPES.get(message.topic)
+    if external_type is None or message.kind is not MessageKind.COMMAND:
+        raise DeviceMessageError("unsupported outbound device command")
+    device_id_value = message.payload.get("device_id")
+    if not isinstance(device_id_value, str):
+        raise DeviceMessageError("outbound command requires device_id")
+    try:
+        device_id = normalize_device_id(device_id_value)
+    except ValueError as exc:
+        raise DeviceMessageError("outbound command has invalid device_id") from exc
+    if message.target != f"device:{device_id}":
+        raise DeviceMessageError("outbound command target does not match device_id")
+    if len(message.message_id) > 128:
+        raise DeviceMessageError("outbound command ID exceeds 128 characters")
+    payload = json.dumps(
+        {"type": external_type, "id": message.message_id},
+        ensure_ascii=False,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return EncodedDeviceCommand(
+        device_id=device_id,
+        topic=f"otto/v1/devices/{device_id}/down",
+        payload=payload,
+    )
+
+
 class DeviceMqttGateway:
     """Subscribe as the broker's master identity and feed validated domain messages."""
 
@@ -378,11 +421,15 @@ class DeviceMqttGateway:
         self._state = DeviceMqttState.CREATED if config.enabled else DeviceMqttState.DISABLED
         self._client: MQTTClient | None = None
         self._receive_task: asyncio.Task[None] | None = None
+        self._command_subscription_ids: list[str] = []
+        self._client_lock = asyncio.Lock()
         self._stopping = False
         self._last_error: str | None = None
         self._messages_received = 0
         self._messages_accepted = 0
         self._messages_rejected = 0
+        self._messages_published = 0
+        self._publish_failures = 0
         self._reconnect_attempts = 0
         self._logger = logger or logging.getLogger("otto_master.device_mqtt")
 
@@ -408,6 +455,9 @@ class DeviceMqttGateway:
             self._last_error = f"{type(exc).__name__}: {exc}"
             self._state = DeviceMqttState.ERROR
             raise DeviceMqttError("failed to connect MQTT device gateway") from exc
+        for topic in _QUERY_TYPES:
+            subscription_id = await self.message_bus.subscribe(topic, self._publish_command)
+            self._command_subscription_ids.append(subscription_id)
         self._receive_task = asyncio.create_task(
             self._receive_loop(),
             name="otto-device-mqtt",
@@ -425,6 +475,9 @@ class DeviceMqttGateway:
             return
         self._stopping = True
         self._state = DeviceMqttState.STOPPING
+        for subscription_id in self._command_subscription_ids:
+            await self.message_bus.unsubscribe(subscription_id)
+        self._command_subscription_ids.clear()
         task = self._receive_task
         self._receive_task = None
         if task is not None:
@@ -448,6 +501,8 @@ class DeviceMqttGateway:
             "messages_received": self._messages_received,
             "messages_accepted": self._messages_accepted,
             "messages_rejected": self._messages_rejected,
+            "messages_published": self._messages_published,
+            "publish_failures": self._publish_failures,
             "reconnect_attempts": self._reconnect_attempts,
             "last_error": self._last_error,
         }
@@ -483,7 +538,8 @@ class DeviceMqttGateway:
                     extra={"event": "device_mqtt_failed_connect_cleanup"},
                 )
             raise
-        self._client = client
+        async with self._client_lock:
+            self._client = client
         self._state = DeviceMqttState.RUNNING
         self._last_error = None
 
@@ -541,8 +597,9 @@ class DeviceMqttGateway:
         return False
 
     async def _disconnect_client(self) -> None:
-        client = self._client
-        self._client = None
+        async with self._client_lock:
+            client = self._client
+            self._client = None
         if client is None:
             return
         try:
@@ -553,6 +610,69 @@ class DeviceMqttGateway:
                 exc_info=True,
                 extra={"event": "device_mqtt_disconnect_failed"},
             )
+
+    async def _publish_command(self, message: Message) -> None:
+        try:
+            command = encode_device_command(message)
+        except DeviceMessageError as exc:
+            await self._publish_command_failure(message, str(exc))
+            return
+        try:
+            async with self._client_lock:
+                client = self._client
+                if not self.running or client is None:
+                    raise DeviceMqttError("MQTT device gateway is unavailable")
+                await asyncio.wait_for(
+                    client.publish(
+                        command.topic,
+                        command.payload,
+                        qos=0,
+                        retain=False,
+                    ),
+                    timeout=self.config.query_timeout_seconds,
+                )
+        except Exception as exc:  # noqa: BLE001 - aMQTT publish errors vary by transport
+            self._last_error = f"{type(exc).__name__}: {exc}"
+            await self._publish_command_failure(message, "mqtt_publish_failed")
+            return
+        self._messages_published += 1
+        await self.message_bus.publish(
+            Message.create(
+                topic="device.command.published",
+                kind=MessageKind.RESULT,
+                source="device_mqtt",
+                target=f"device:{command.device_id}",
+                correlation_id=message.message_id,
+                payload={
+                    "device_id": command.device_id,
+                    "transport": "mqtt",
+                    "command_topic": message.topic,
+                    "qos": 0,
+                    "retain": False,
+                },
+            )
+        )
+
+    async def _publish_command_failure(self, message: Message, reason: str) -> None:
+        self._publish_failures += 1
+        device_id = message.payload.get("device_id")
+        normalized = device_id if isinstance(device_id, str) else "unknown"
+        target = message.target if message.target.startswith("device:") else "service:device_verifier"
+        await self.message_bus.publish(
+            Message.create(
+                topic="device.command.failed",
+                kind=MessageKind.RESULT,
+                source="device_mqtt",
+                target=target,
+                correlation_id=message.message_id,
+                payload={
+                    "device_id": normalized,
+                    "transport": "mqtt",
+                    "command_topic": message.topic,
+                    "reason": reason,
+                },
+            )
+        )
 
     async def _publish_transport_unavailable(self, reason: str) -> None:
         if not self.message_bus.running:
