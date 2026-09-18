@@ -1,0 +1,61 @@
+project:
+  name: otto-master
+
+server:
+  host: 0.0.0.0
+  port: 8080
+  websocket_path: /xiaozhi/v1/
+
+runtime:
+  message_queue_size: 1024
+  worker_threads: 4
+  shutdown_timeout_seconds: 10
+
+discovery:
+  enabled: true
+  hostname: master.local
+  service_type: _otto-master._tcp.local.
+
+database:
+  path: data/otto.db
+  wal: true
+
+audio:
+  input_sample_rate: 16000
+  output_sample_rate: 24000
+  channels: 1
+  frame_duration_ms: 60
+  format: opus
+
+wake:
+  command_timeout_seconds: 6
+  conversation_timeout_seconds: 15
+  acknowledgement_template: "{device_name} 在"
+  fail_closed: true
+
+cloud:
+  request_timeout_seconds: 30
+  asr:
+    provider: ""
+    base_url: ""
+    api_key_env: OTTO_ASR_API_KEY
+  llm:
+    provider: deepseek
+    protocol: openai_chat_completions
+    base_url: https://api.deepseek.com
+    model: deepseek-flash
+    api_key_env: DEEPSEEK_API_KEY
+    stream: true
+    thinking: disabled
+  tts:
+    provider: ""
+    base_url: ""
+    api_key_env: OTTO_TTS_API_KEY
+
+ota:
+  enabled: true
+  firmware_path: firmware/xiaozhi.bin
+
+logging:
+  level: INFO
+  jsonl_path: logs/otto-master.jsonl

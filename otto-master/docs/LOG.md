@@ -1,0 +1,106 @@
+# Construction Log
+
+本文件保存索引和最近施工记录。长期记录按版本归档到 `docs/logs/`。
+
+## 归档
+
+| 版本 | 文件 |
+|---|---|
+| 0.0.0 | `docs/logs/LOG-0.0.0.md` |
+
+## 记录模板
+
+```markdown
+## YYYY-MM-DD / Phase N / 标题
+
+### 版本
+- `x.y.z`
+
+### Git迭代
+- `testN.N`
+
+### 目标
+- 本轮目标
+
+### 修改范围
+- 文件或模块
+
+### 验证
+- 命令：结果
+- 未运行项及原因
+
+### 风险
+- 风险或无
+
+### 回滚判断
+- 是否需要回滚及目标
+
+### 下一步
+- 下一项工作
+```
+
+## 最近记录
+
+### 2026-09-18 / Phase 0 / Otto Master文档脚手架
+
+- 版本：`0.0.0`
+- Git迭代：计划使用 `test0.1`，尚未提交
+- 目标：在liteserver仓库建立不含业务实现的Otto Master目录和治理文档。
+- 修改：配置模板、空模块、宪法、架构、施工计划、进度、模块状态、消息合同和调试指南。
+- 验证：目录、Python占位、TOML、YAML和运行产物规则检查通过；未运行应用测试。
+- 风险：项目当前不可运行；云Provider和Windows Opus打包尚未验证。
+- 下一步：Phase 1 Runtime与Message Bus。
+
+### 2026-09-18 / Phase 0 / 选定DeepSeek LLM Provider
+
+- 版本：`0.0.0`
+- Git迭代：计划纳入 `test0.1`，尚未提交
+- 目标：记录Otto Master第一套LLM Provider选择，不实现调用代码。
+- 修改：配置DeepSeek官方OpenAI兼容Base URL、`deepseek-flash`模型和环境变量名称。
+- 安全：聊天中出现的旧密钥未写入任何文件；本地 `.env` 继续保持空值。
+- 验证：YAML解析和空密钥检查。
+- 下一步：轮换已暴露密钥；Phase 7实现Provider时再做真实API连通测试。
+
+### 2026-09-18 / Phase 0 / 融合MQTT集群控制与真机验收基线
+
+- 版本：`0.0.0`
+- Git迭代：计划纳入 `test0.1`，尚未提交
+- 目标：把已验证TCP控制行为迁移为MQTT集群控制合同，并纳入后续施工与测试。
+- 修改：MQTT内嵌Broker边界、Topic、JSON、QoS、鉴权、TCP回退、施工阶段和EVA1/EVA2真机测试规则。
+- 外部基线：用户报告EVA1/EVA2已运行固件 `2.0.5`，位于同一Wi-Fi，均能查询14个动作并完成 `swing → stop → idle`；控制身份不依赖静态IP。
+- 代码核对：固件MQTT已支持action/query/actions，但MQTT stop、独立hello/heartbeat和命令去重仍需实现；现有TCP链路继续作为回退。
+- 验证：文档与本地固件源码交叉检查；未启动Otto Master、未执行MQTT真机测试、未修改或烧录固件。
+- 下一步：Phase 3验证内嵌Broker跨平台可行性；Phase 4使用EVA1/EVA2完成MQTT等价验收。
+
+### 2026-09-18 / Phase 1 / Runtime与Message Bus
+
+- 版本：`0.1.0`
+- Git迭代：未创建支线，未commit、未push；将与Phase 0合并纳入 `test0.1` 恢复基线
+- 目标：完成配置加载、消息合同、进程内Message Bus和Runtime生命周期。
+- 修改：`config.py`、`messages.py`、`message_bus.py`、`runtime.py`、`structured_logging.py`、包入口及Phase 1测试。
+- 验证：`ruff check src tests`通过；`mypy src`通过；`pytest -q`为10通过；`python -m otto_master`启动并通过Ctrl-C干净关闭。
+- 未运行：真实云API、ESP32硬件、Web、SQLite和跨平台Windows验证；这些不属于Phase 1。
+- 风险：Message Bus当前只支持精确主题，持久化和外部Gateway尚未实现。
+- 下一步：先建立 `test0.1` Phase 0+1恢复基线并上传GitHub，再进入Phase 2。
+
+### 2026-09-18 / 治理 / 强化强制施工门禁
+
+- 版本：`0.1.0`
+- Git迭代：文档变更纳入待建立的 `test0.1` 恢复基线；本轮未擅自提交现有来源混合的工作区。
+- 目标：把“先备份、再计划、施工、测试返工、日志、上传”的流程从建议升级为不可跳过的施工门禁。
+- 修改：新增并贯通GitHub基线、施工依据阅读、Session Contract、二元验收矩阵、测试返工闭环、文档收尾、测试支线提交与远程哈希核对规则。
+- 授权边界：创建 `testN.N`、验收commit和push测试支线随施工请求自动授权；合并main、tag、正式发布、force-push、删远端分支和改写历史必须单独授权。
+- 历史处理：Phase 0和Phase 1均未形成远程检查点，不伪造历史；下一步用 `test0.1` 建立包含两阶段的恢复基线，Phase 2再使用 `test0.2`。
+- 验证：文档一致性和关键规则文本检查；未修改Python业务代码，未运行应用测试或硬件测试。
+- 风险：当前Phase 0+1仍未备份到GitHub，在恢复基线push并核对哈希前禁止Phase 2施工。
+- 下一步：执行 `test0.1` 恢复基线门禁。
+
+### 2026-09-18 / Phase 0+1 / 恢复基线 test0.1
+
+- 版本：`0.1.0`
+- Git迭代：`test0.1`
+- 目标：将此前未形成Git检查点的Phase 0/Phase 1工程备份到GitHub，作为Phase 2的可恢复基线。
+- 修改：新增 `docs/sessions/20260918-phase0-test0.1.md`，并更新当前进度；精确提交 `otto-master/**`。
+- 排除：根目录已有 `README.md` 修改，以及 `.env`、虚拟环境、数据库、JSONL日志和固件。
+- 验证：结果回填到Session Contract；远程支线哈希在push后核对。
+- 下一步：在 `test0.1` 远程检查点基础上创建 `test0.2`，进入Phase 2 SQLite。
