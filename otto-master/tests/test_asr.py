@@ -423,3 +423,177 @@ async def test_asr_stable_vad_silence_closes_stream_when_provider_has_no_partial
         await service.shutdown()
         await bus.unsubscribe_observer(observer)
         await bus.stop()
+
+
+@pytest.mark.asyncio
+async def test_asr_partial_endpoint_survives_vad_chatter() -> None:
+    class PartialThenFinalProvider:
+        def __init__(self) -> None:
+            self.received: list[bytes] = []
+
+        async def transcribe(
+            self,
+            pcm_chunks: AsyncIterable[bytes],
+            *,
+            uid: str,
+            sample_rate: int = 16_000,
+        ) -> AsyncIterator[SpeechRecognitionResult]:
+            chunks = pcm_chunks.__aiter__()
+            self.received.append(await anext(chunks))
+            yield SpeechRecognitionResult("你好奶龙", False, "stream-request")
+            async for chunk in chunks:
+                self.received.append(chunk)
+            yield SpeechRecognitionResult("你好奶龙。", True, "stream-request")
+
+    bus = MessageBus()
+    reader = FakeFrameReader()
+    provider = PartialThenFinalProvider()
+    service = AsrService(
+        bus,
+        reader,
+        provider,
+        chunk_frames=1,
+        partial_stability_seconds=0.04,
+        max_utterance_seconds=1,
+    )
+    observed: list[Message] = []
+    packet = StreamingOpusEncoder(OpusParameters(16_000)).feed(b"\x00" * 1_920)[0]
+    reader.frames["frame-0"] = packet
+
+    await bus.start()
+    observer = await bus.subscribe_observer(observed.append)
+    await service.start()
+    try:
+        await service.arm_next_utterance("eva000000001", "s1")
+        await bus.publish(_audio_message("audio.input.started", "eva000000001", "s1", "u1"))
+        await bus.publish(_frame_message("eva000000001", "s1", "u1", 0, "frame-0"))
+        await bus.drain()
+        await _wait_topic(observed, "voice.transcription.partial")
+
+        for _ in range(6):
+            await bus.publish(_activity_message("eva000000001", "s1", "u1", False))
+            await bus.drain()
+            await asyncio.sleep(0.005)
+            await bus.publish(_activity_message("eva000000001", "s1", "u1", True))
+            await bus.drain()
+            await asyncio.sleep(0.005)
+
+        completed = await _wait_topic(observed, "voice.transcription.completed")
+        endpoint = await _wait_topic(observed, "voice.endpoint.detected")
+
+        assert completed.payload["text"] == "你好奶龙。"
+        assert endpoint.payload["method"] == "partial_stability"
+        assert service.status()["partial_endpointed"] == 1
+        assert service.status()["vad_endpointed"] == 0
+    finally:
+        await service.shutdown()
+        await bus.unsubscribe_observer(observer)
+        await bus.stop()
+
+
+@pytest.mark.asyncio
+async def test_asr_max_duration_closes_stream_despite_continuous_vad_chatter() -> None:
+    class FinalOnInputCloseProvider:
+        async def transcribe(
+            self,
+            pcm_chunks: AsyncIterable[bytes],
+            *,
+            uid: str,
+            sample_rate: int = 16_000,
+        ) -> AsyncIterator[SpeechRecognitionResult]:
+            async for _chunk in pcm_chunks:
+                pass
+            yield SpeechRecognitionResult("最多十二秒。", True, "stream-request")
+
+    bus = MessageBus()
+    reader = FakeFrameReader()
+    service = AsrService(
+        bus,
+        reader,
+        FinalOnInputCloseProvider(),
+        chunk_frames=1,
+        partial_stability_seconds=0.03,
+        max_utterance_seconds=0.08,
+    )
+    observed: list[Message] = []
+    packet = StreamingOpusEncoder(OpusParameters(16_000)).feed(b"\x00" * 1_920)[0]
+    reader.frames["frame-0"] = packet
+
+    await bus.start()
+    observer = await bus.subscribe_observer(observed.append)
+    await service.start()
+    chatter_task: asyncio.Task[None] | None = None
+    try:
+        await service.arm_next_utterance("eva000000001", "s1")
+        await bus.publish(_audio_message("audio.input.started", "eva000000001", "s1", "u1"))
+        await bus.publish(_frame_message("eva000000001", "s1", "u1", 0, "frame-0"))
+        await bus.drain()
+
+        async def chatter() -> None:
+            while not any(message.topic == "voice.endpoint.detected" for message in observed):
+                await bus.publish(_activity_message("eva000000001", "s1", "u1", False))
+                await bus.drain()
+                await asyncio.sleep(0.005)
+                await bus.publish(_activity_message("eva000000001", "s1", "u1", True))
+                await bus.drain()
+                await asyncio.sleep(0.005)
+
+        chatter_task = asyncio.create_task(chatter())
+        endpoint = await _wait_topic(observed, "voice.endpoint.detected")
+        completed = await _wait_topic(observed, "voice.transcription.completed")
+
+        assert endpoint.payload["method"] == "max_duration"
+        assert completed.payload["text"] == "最多十二秒。"
+        assert service.status()["max_duration_endpointed"] == 1
+    finally:
+        if chatter_task is not None:
+            chatter_task.cancel()
+            await asyncio.gather(chatter_task, return_exceptions=True)
+        await service.shutdown()
+        await bus.unsubscribe_observer(observer)
+        await bus.stop()
+
+
+@pytest.mark.asyncio
+async def test_asr_close_detaches_active_utterance_before_task_cancellation() -> None:
+    class BlockingProvider:
+        def __init__(self) -> None:
+            self.started = asyncio.Event()
+
+        async def transcribe(
+            self,
+            pcm_chunks: AsyncIterable[bytes],
+            *,
+            uid: str,
+            sample_rate: int = 16_000,
+        ) -> AsyncIterator[SpeechRecognitionResult]:
+            async for _chunk in pcm_chunks:
+                self.started.set()
+                await asyncio.Event().wait()
+            if False:  # pragma: no cover - establishes the async-generator contract
+                yield SpeechRecognitionResult("", True, "never")
+
+    bus = MessageBus()
+    reader = FakeFrameReader()
+    provider = BlockingProvider()
+    service = AsrService(bus, reader, provider, chunk_frames=1)
+    packet = StreamingOpusEncoder(OpusParameters(16_000)).feed(b"\x00" * 1_920)[0]
+    reader.frames["frame-0"] = packet
+
+    await bus.start()
+    await service.start()
+    try:
+        await service.arm_next_utterance("eva000000001", "s1")
+        await bus.publish(_audio_message("audio.input.started", "eva000000001", "s1", "u1"))
+        await bus.publish(_frame_message("eva000000001", "s1", "u1", 0, "frame-0"))
+        await bus.drain()
+        await asyncio.wait_for(provider.started.wait(), timeout=1)
+
+        await service.close_device_input("eva000000001")
+
+        assert service.status()["active_utterances"] == 0
+        await service.arm_next_utterance("eva000000001", "s2")
+        assert service.status()["armed_devices"] == 1
+    finally:
+        await service.shutdown()
+        await bus.stop()

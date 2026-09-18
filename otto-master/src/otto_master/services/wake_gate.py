@@ -132,6 +132,7 @@ class _Conversation:
     idle_task: asyncio.Task[None] | None = None
     speech_detected: bool = False
     turn_count: int = 0
+    empty_transcription_streak: int = 0
     exit_reason: str | None = None
     failure_code: str | None = None
 
@@ -196,6 +197,9 @@ class WakeGateService:
         self._subscriptions: list[str] = []
         self._lock = asyncio.Lock()
         self._running = False
+        self._empty_transcription_retries = 0
+        self._empty_transcription_exits = 0
+        self._vad_only_activity_ignored_for_idle = 0
 
     async def start(self) -> None:
         if self._running:
@@ -269,6 +273,7 @@ class WakeGateService:
             conversation.idle_task = None
             conversation.speech_detected = False
             conversation.turn_count = 0
+            conversation.empty_transcription_streak = 0
             conversation.exit_reason = "reset"
             conversation.failure_code = None
         tasks = tuple(item for item in (task, idle_task) if item is not None)
@@ -281,6 +286,11 @@ class WakeGateService:
             "enabled": True,
             "healthy": self._running,
             "state": "running" if self._running else "stopped",
+            "empty_transcription_retries": self._empty_transcription_retries,
+            "empty_transcription_exits": self._empty_transcription_exits,
+            "vad_only_activity_ignored_for_idle": (
+                self._vad_only_activity_ignored_for_idle
+            ),
             "devices": {
                 device_id: {
                     "state": conversation.state.value,
@@ -289,6 +299,9 @@ class WakeGateService:
                     "round_id": conversation.round_id,
                     "speech_detected": conversation.speech_detected,
                     "turn_count": conversation.turn_count,
+                    "empty_transcription_streak": (
+                        conversation.empty_transcription_streak
+                    ),
                     "exit_reason": conversation.exit_reason,
                     "failure_code": conversation.failure_code,
                 }
@@ -319,6 +332,7 @@ class WakeGateService:
                 conversation.round_id = str(uuid4())
                 conversation.speech_detected = False
                 conversation.turn_count = 0
+                conversation.empty_transcription_streak = 0
                 conversation.exit_reason = None
                 conversation.failure_code = None
                 conversation.task = asyncio.create_task(
@@ -364,6 +378,7 @@ class WakeGateService:
             idle_task = conversation.idle_task
             conversation.idle_task = None
             conversation.speech_detected = True
+            conversation.empty_transcription_streak = 0
             conversation.turn_count += 1
             conversation.state = ConversationState.ANSWERING
             conversation.task = asyncio.create_task(
@@ -392,6 +407,7 @@ class WakeGateService:
         idle_task: asyncio.Task[None] | None = None
         round_id: str | None = None
         conversation: _Conversation | None = None
+        should_end = False
         async with self._lock:
             conversation = self._conversations.get(device_id)
             if (
@@ -401,14 +417,27 @@ class WakeGateService:
                 or conversation.utterance_id != utterance_id
             ):
                 return
-            idle_task = conversation.idle_task
-            conversation.idle_task = None
-            conversation.state = ConversationState.LAUGHING
             conversation.utterance_id = None
-            conversation.round_id = str(uuid4())
-            round_id = conversation.round_id
-            conversation.speech_detected = False
-            conversation.task = None
+            conversation.empty_transcription_streak += 1
+            if conversation.empty_transcription_streak > 1:
+                should_end = True
+            else:
+                idle_task = conversation.idle_task
+                conversation.idle_task = None
+                conversation.state = ConversationState.LAUGHING
+                conversation.round_id = str(uuid4())
+                round_id = conversation.round_id
+                conversation.speech_detected = False
+                conversation.task = None
+        if should_end:
+            self._empty_transcription_exits += 1
+            await self._end_device(
+                conversation,
+                "empty_transcription_limit",
+                close_session=True,
+            )
+            return
+        self._empty_transcription_retries += 1
         if idle_task is not None:
             idle_task.cancel()
             await asyncio.gather(idle_task, return_exceptions=True)
@@ -427,11 +456,18 @@ class WakeGateService:
             )
 
     async def _on_transcription_partial(self, message: Message) -> None:
+        text = message.payload.get("text")
+        if not isinstance(text, str) or not text.strip():
+            return
         await self._mark_speech_activity(message)
 
     async def _on_audio_activity(self, message: Message) -> None:
         if message.payload.get("speaking") is True:
-            await self._mark_speech_activity(message)
+            # The current Otto firmware's local VAD chatters on room noise and
+            # speaker tail.  It remains useful to ASR as an endpoint hint, but
+            # only cloud text is strong enough evidence to defeat the 8-second
+            # no-speech exit gate.
+            self._vad_only_activity_ignored_for_idle += 1
 
     async def _mark_speech_activity(self, message: Message) -> None:
         identity = _audio_identity(message)

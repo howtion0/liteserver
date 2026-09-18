@@ -387,6 +387,18 @@ def _activity(utterance_id: str, speaking: bool = True) -> Message:
     )
 
 
+def _partial(utterance_id: str, text: str) -> Message:
+    message = _transcription(utterance_id, text)
+    return Message.create(
+        topic="voice.transcription.partial",
+        kind=MessageKind.EVENT,
+        source=message.source,
+        target=message.target,
+        correlation_id=message.correlation_id,
+        payload={**message.payload, "is_final": False},
+    )
+
+
 def _session_closed(reason: str = "device_goodbye") -> Message:
     return Message.create(
         topic="voice.session.closed",
@@ -1101,6 +1113,60 @@ async def test_empty_final_laughs_once_and_reopens_listening() -> None:
 
 
 @pytest.mark.asyncio
+async def test_second_consecutive_empty_final_exits_without_laughter_loop() -> None:
+    trace: list[str] = []
+    bus = MessageBus()
+    asr = FakeAsrGate(trace)
+    dispatcher = FakeDispatcher(trace)
+    playback_sink = FakePlaybackSink(trace)
+    service = WakeGateService(
+        bus,
+        asr,
+        FakeSentenceSource(trace),
+        FakeSentencePlayer(trace),
+        dispatcher,
+        playback_sink,
+        query_interval_seconds=0.001,
+        query_timeout_seconds=0.1,
+        laughter_timeout_seconds=1,
+    )
+
+    await bus.start()
+    responder = await _install_sound_responder(
+        bus,
+        trace,
+        [True, False, True, False],
+    )
+    await service.start()
+    try:
+        await bus.publish(_audio_started("trigger-1"))
+        await _wait_state(service, ConversationState.LISTENING)
+        await bus.publish(_audio_started("question-1"))
+        await _wait_state(service, ConversationState.RECOGNIZING)
+        await bus.publish(_transcription("question-1", ""))
+        await _wait_state(service, ConversationState.LISTENING)
+
+        await bus.publish(_audio_started("question-2"))
+        await _wait_state(service, ConversationState.RECOGNIZING)
+        await bus.publish(_transcription("question-2", "   "))
+        await _wait_state(service, ConversationState.WAITING)
+
+        status = service.status()
+        assert len(dispatcher.actions) == 2
+        assert playback_sink.closed_sessions == [(DEVICE_ID, SESSION_ID)]
+        assert status["empty_transcription_retries"] == 1
+        assert status["empty_transcription_exits"] == 1
+        assert status["devices"][DEVICE_ID]["empty_transcription_streak"] == 2
+        assert status["devices"][DEVICE_ID]["exit_reason"] == (
+            "empty_transcription_limit"
+        )
+    finally:
+        await service.shutdown()
+        await bus.unsubscribe(responder)
+        await bus.stop()
+
+
+@pytest.mark.asyncio
 async def test_eight_second_equivalent_idle_timeout_closes_the_chat_session() -> None:
     trace: list[str] = []
     bus = MessageBus()
@@ -1135,7 +1201,7 @@ async def test_eight_second_equivalent_idle_timeout_closes_the_chat_session() ->
 
 
 @pytest.mark.asyncio
-async def test_real_speech_activity_cancels_the_idle_timeout() -> None:
+async def test_vad_only_activity_does_not_defeat_the_idle_timeout() -> None:
     trace: list[str] = []
     bus = MessageBus()
     playback_sink = FakePlaybackSink(trace)
@@ -1161,6 +1227,46 @@ async def test_real_speech_activity_cancels_the_idle_timeout() -> None:
         await bus.publish(_audio_started("question-1"))
         await _wait_state(service, ConversationState.RECOGNIZING)
         await bus.publish(_activity("question-1"))
+        await _wait_state(service, ConversationState.WAITING)
+
+        status = service.status()["devices"][DEVICE_ID]
+        assert status["state"] == "waiting"
+        assert status["speech_detected"] is False
+        assert playback_sink.closed_sessions == [(DEVICE_ID, SESSION_ID)]
+        assert service.status()["vad_only_activity_ignored_for_idle"] == 1
+    finally:
+        await service.shutdown()
+        await bus.unsubscribe(responder)
+        await bus.stop()
+
+
+@pytest.mark.asyncio
+async def test_nonempty_asr_partial_cancels_the_idle_timeout() -> None:
+    trace: list[str] = []
+    bus = MessageBus()
+    playback_sink = FakePlaybackSink(trace)
+    service = WakeGateService(
+        bus,
+        FakeAsrGate(trace),
+        FakeSentenceSource(trace),
+        FakeSentencePlayer(trace),
+        FakeDispatcher(trace),
+        playback_sink,
+        query_interval_seconds=0.001,
+        query_timeout_seconds=0.1,
+        laughter_timeout_seconds=1,
+        idle_timeout_seconds=0.03,
+    )
+
+    await bus.start()
+    responder = await _install_sound_responder(bus, trace, [True, False])
+    await service.start()
+    try:
+        await bus.publish(_audio_started("trigger-1"))
+        await _wait_state(service, ConversationState.LISTENING)
+        await bus.publish(_audio_started("question-1"))
+        await _wait_state(service, ConversationState.RECOGNIZING)
+        await bus.publish(_partial("question-1", "奶龙"))
         await asyncio.sleep(0.06)
 
         status = service.status()["devices"][DEVICE_ID]
@@ -1323,9 +1429,9 @@ async def test_laughter_gate_retries_one_transient_state_query_timeout() -> None
         FakeSentencePlayer(trace),
         dispatcher,
         FakePlaybackSink(trace),
-        query_interval_seconds=0.001,
-        query_timeout_seconds=0.01,
-        laughter_timeout_seconds=0.25,
+        query_interval_seconds=0.005,
+        query_timeout_seconds=0.1,
+        laughter_timeout_seconds=1,
     )
     query_count = 0
 

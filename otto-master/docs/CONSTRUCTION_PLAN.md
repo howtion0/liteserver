@@ -234,7 +234,7 @@ Provider和协议已经通过独立烟测冻结；`test0.9`又完成EVA1的MQTT+
 
 ### `test0.9` 最快纵向 MVP 检查点
 
-本检查点按最新最快路线先在EVA1跑通MQTT信令与AES-128-CTR UDP Opus的单台纵向闭环；WebSocket保留兼容实现。EVA2由用户关机，因此本结果不会替代后续双设备和双Profile矩阵。
+本检查点按最新最快路线先在EVA1跑通MQTT信令与AES-128-CTR UDP Opus的单台纵向闭环；WebSocket保留兼容实现。执行该检查点时EVA2由用户关机，因此本结果不会替代后续双设备和双Profile矩阵；EVA2后来重新在线也不自动补足验收。
 
 1. 每次新的提问轮次开始时先关闭 ASR 输入并触发 EVA1 内置大笑。
 2. 必须真实观测 `sound.busy=true` 后再观测 `sound.busy=false`；动作 ACK、idle、固定延时或预计音频长度均不能代替播放完成证据。
@@ -245,7 +245,7 @@ Provider和协议已经通过独立烟测冻结；`test0.9`又完成EVA1的MQTT+
 7. 状态机、Provider 和句子切分先用 fake 时钟/Provider 验证，再运行真实 API 和 EVA1 真机；首个闭环见 `docs/sessions/20260918-voice-mvp-test0.9.md`，循环加固见`docs/sessions/20260919-voice-loop-test0.9.md`。
 8. ASR、LLM、TTS各阶段使用有界生产者/消费者队列：当前45秒对话窗口下ASR 750帧、LLM 4项、TTS句子4/PCM 16/Opus 48；队列满必须失败关闭，不允许无限积压。
 9. DeepSeek输入硬截断512字符，输出硬截断96字符并限制`max_tokens=96`；角色固定为奶龙，回答通常1至3句；火山TTS固定湾区大叔音。
-10. 回答后在同一session重新执行“2秒本地笑声→新utterance→监听”，形成有界循环；每次开放监听后8秒内没有VAD或ASR partial即由Server退出。
+10. 回答后在同一session重新执行“2秒本地笑声→新utterance→监听”，形成有界循环；每次开放监听后8秒内没有非空ASR partial即由Server退出。设备VAD只辅助ASR端点，不得因房间噪声或扬声器尾音延长WakeGate窗口。
 11. Otto按钮在idle时进入循环对话，在connecting/listening/speaking时退出；按钮退出必须产生设备`goodbye`并释放UDP session，再按一次建立全新session。
 12. DeepSeek请求携带由当前设备动作目录收窄得到的`tools/tool_choice`，流式组装至多一个`tool_call`；目标设备锁定当前语音session，参数经Schema再次校验后只通过现有Dispatcher执行。成功动作不追加TTS，失败只播固定失败提示，显式`laugh`完成后复用为下一轮笑声门禁。
 13. 工具轮不写成普通assistant文本历史；真实tool/tool-result结构尚未进入`ChatMessage`前，宁可不保留该轮，也不能用“已执行”文本污染下一轮工具选择。
@@ -260,11 +260,11 @@ Provider和协议已经通过独立烟测冻结；`test0.9`又完成EVA1的MQTT+
 4. WebUI按稳定device_id多选1至16台设备，使用动作目录交集，显式确认后并发提交批量动作或stop；每台设备独立结果，同一设备仍由Dispatcher串行。
 5. Server维护每设备有界对话投影，WebUI显示状态、用户转写、助手句子、工具/动作和错误；旧session、敏感字段和音频字段不能污染快照。
 6. WebUI提供前进、后退、左右转、跳跃、左右摇摆、太空步、抖动、弯腰、大笑、复位和stop快捷按钮；目标仍来自显式勾选，目录缺失时先做只读verify。控制令牌只保存在浏览器会话；本机开发启动可通过仅限loopback、不会进入HTTP请求的URL fragment一次性注入并立即从地址栏移除。未授权或401时锁定所有mutation控件并常驻说明“未进入服务端”；正式8081控制面不再与旧8080诊断进程并存。
-7. ASR在云partial稳定端点之外增加“已观测说话后VAD连续静音1.2秒”兜底；空final只触发一次本地大笑并重开监听，不调用LLM或卡在recognizing。Dispatcher等待舵机idle和本地sound非busy后才完成动作。
+7. ASR使用相互独立的“非空partial稳定1.2秒”“已观测说话后VAD连续静音1.2秒”和“utterance开始后12秒硬上限”三个端点，任一获胜后排空尾帧并结束云输入；清理先原子摘除活动utterance。首次空final只触发一次本地大笑并重开监听，连续第二次空final正常退出，不调用LLM或卡在recognizing。Dispatcher等待舵机idle和本地sound非busy后才完成动作。
 8. EVA固件2.0.15用21个看山对话表情和22个动作贴图替换中央旧大眼区域，保留顶部状态栏和底部聊天文字；动作结束/stop恢复最近基础表情。设备音量一次性迁移到100，动作任务优先级低于音频任务；正式对话控制先返回关联ACK，再异步切换音频通道。
 9. 真机默认三步`swing`可略超15秒；生产动作完成时限提高到30秒，仍保留超时自动stop。ACK时限不变，避免用放宽设备接收门限掩盖断线。
 
-当前状态（2026-09-19）：本地锁文件、Ruff、mypy strict、176项pytest、Node语法和差异检查通过；2.0.15镜像完整构建并OTA到EVA1，hello/心跳确认版本2.0.15与音量100，Server确认TTS增益2.0。正式对话start/stop关联ACK、VAD兜底收句、WebUI真实前进/转向/太空步和动作音效排空均取得真机证据；空final恢复分支已自动验证，需下一次真机语音回合复验。EVA2保持关机，真实双机语音不冒充通过。详细记录见`docs/sessions/20260919-multidevice-webui-test1.0.md`。
+当前状态（2026-09-19）：本地锁文件、Ruff、mypy strict、183项pytest、Node语法和差异检查通过；2.0.15镜像完整构建并OTA到EVA1，hello/心跳确认版本2.0.15与音量100，Server确认TTS增益2.0。EVA1已完成五轮有效流式问答、语音前进工具、按钮退出、连续空final熔断和VAD噪声下精确8秒静默退出；ASR/TTS无失败，最终WakeGate waiting、活动ASR/UDP均为0。用户随后确认“对话感觉没问题了”，因此EVA1当前对话流畅度、音量和TTS听感记为主观PASS。WebUI真实前进/转向/太空步和动作音效排空也已有真机证据。EVA2本次对话验收未使用，真实双机语音不冒充通过。详细记录见`docs/sessions/20260919-multidevice-webui-test1.0.md`。
 
 纵向 MVP 的硬门禁是“大笑真实结束后才能开始听”。若没有完整的 `sound.busy true→false` 证据，本轮必须失败关闭，ASR 与 LLM 调用数必须为零。
 
@@ -380,4 +380,4 @@ Provider和协议已经通过独立烟测冻结；`test0.9`又完成EVA1的MQTT+
 11. 重启MQTT Broker后两台设备恢复连接和状态查询
 ```
 
-Phase 4真机步骤、Topic和JSON以 `docs/MQTT_CONTROL_CONTRACT.md` 为准。固件`2.0.5`的TCP测试只保留为历史行为基线；MQTT控制已在两台`2.0.6`真机通过，EVA1随后完成2.0.11语音/工具纵向链并升级到2.0.15看山/音量/正式对话控制版本，EVA2当前为`2.0.9`且关机。历史结果不能替代下一轮双机并发验收。
+Phase 4真机步骤、Topic和JSON以 `docs/MQTT_CONTROL_CONTRACT.md` 为准。固件`2.0.5`的TCP测试只保留为历史行为基线；MQTT控制已在两台`2.0.6`真机通过，EVA1随后完成2.0.11语音/工具纵向链并升级到2.0.15看山/音量/正式对话控制版本。EVA2当前以`2.0.9`重新在线，但本次对话修复未触碰；历史结果或在线状态都不能替代下一轮双机并发验收。

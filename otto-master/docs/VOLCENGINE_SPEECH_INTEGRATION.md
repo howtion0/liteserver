@@ -57,7 +57,7 @@
 
 - 状态机变为`waiting → laughing → listening → recognizing → answering → laughing...`；回答后沿用同一设备session，但每轮使用新的`round_id`和utterance。
 - 每次门禁都先关闭ASR，触发本地`laugh`，观测`sound.busy=true → false`后才发送一次`tts start → stop`建立干净的新监听轮。
-- 监听开放后启动8秒计时。当前轮VAD `speaking=true`或ASR partial会取消计时；纯静默则Server关闭session。按钮在对话态发送设备`goodbye`退出，再按一次建立新session。
+- 监听开放后启动8秒计时。只有当前轮非空ASR partial会取消计时；设备VAD仍参与ASR端点，但其房间噪声/扬声器尾音抖动不能延长WakeGate窗口。没有云端文字证据时Server准时关闭session。按钮在对话态发送设备`goodbye`退出，再按一次建立新session。
 - 原笑声资产为48 kHz名义输入和20 ms包，对60 ms播放链更敏感；2.0.10起改为24 kHz OpusHead、单声道、34个60 ms包。`PlaySound`等待解码队列、PCM队列和I2S写入全部排空后才清除`sound.busy`。
 - 2.0.11让无舵机`laugh`保持动作`moving`直到本地音频真正结束，修复Dispatcher因错过瞬时moving而占住命令15秒、进而取消下一轮笑声的问题；新的不同session也可从失败状态自恢复。
 - EVA1真机完成一次真实回答后的第二轮笑声和监听；连续两个独立门禁均观测完整忙闲边沿，另一次监听在8秒静默后`idle_timeout`退出且UDP sessions=0。
@@ -67,14 +67,15 @@
 - TTS Service在Opus编码前对火山返回的24 kHz单声道S16LE PCM应用`audio.tts_pcm_gain`。每个样本四舍五入并饱和到`[-32768, 32767]`，不得发生整数回绕；任意HTTP块边界拆开的单个字节会保留到下一块，最终残留半个采样视为Provider协议错误。
 - 首轮真实短句在1.5倍时得到113,398字节PCM、约2.362秒音频；峰值从30,365升到32,768，RMS从4,338.5升到6,412.2，182个样本发生饱和，约占0.32%。这些数字仅描述该短句，不外推为所有文本的响度或削波比例。
 - 用户仍反馈1.5倍和设备音量90偏小，因此生产配置调整为2.0，EVA1固件2.0.13把持久输出音量迁移到100；当前2.0.15继续保留该档位。OTA后hello已报告`firmware_version=2.0.15`，心跳运行态报告`output_volume=100`，Server健康状态报告`pcm_gain=2.0`。
-- 2.0倍的最终清晰度、卡顿和明显削波仍以用户真机试听为准，未确认前不能标记主观验收PASS。若出现破音，应改用压缩/限幅策略，不继续提高硬增益。
+- 修复后五轮真实问答均完成TTS，用户随后确认“对话感觉没问题了”；因此当前2.0倍增益、设备音量100下的清晰度、流畅度和明显削波主观门禁记为PASS。若后续其他文本暴露破音，应改用压缩/限幅策略，不继续提高硬增益。
 
 ### 2.6 `test1.0` ASR端点与动作音效时序加固
 
 - 03:43至03:47左右的“丝滑”实测中，每个有效utterance都在开始后约1.1至3.1秒收到火山partial；最后一条partial稳定1.2秒后收句，云端final再用约0.1至0.33秒返回。DeepSeek开始生成到首段TTS播放约0.6至1.1秒，因此用户感知为连续响应。
 - 05:21故障轮并非麦克风距离问题：EVA1上传491个60 ms Opus帧（约29.5秒），设备VAD持续上报且UDP只出现少量序号缺口，但火山没有返回任何partial。旧实现只靠partial稳定收句，最终等到30秒云超时。
-- ASR现同时订阅当前utterance的VAD：只有先观测到`speaking=true`，再连续1.2秒`false`才走`vad_silence`端点；新的`true`会取消待定端点。收句前先禁止新帧，队列中已接收尾帧全部送完，避免截断末字。
-- 首次真机复测在最后一次`false`后1.202秒触发`vad_silence`，148 ms后火山返回空final，证明30秒悬挂已消除，也暴露旧WakeGate会停在`recognizing`。现对空final执行一次本地大笑并重新开放监听，不调用LLM、不增加turn、不因重复final重复动作；该恢复分支已有自动回归，仍需下一次真机语音回合复验。
+- ASR现为三个独立的一次性端点：非空partial稳定1.2秒、已说话后的VAD连续静音1.2秒、从utterance开始的12秒硬上限。新的VAD `true`只取消`vad_silence`，不再像旧共享计时器那样反复续掉partial稳定；任一端点获胜后先禁止新帧、取消其余计时器，再把队列中已接收尾帧全部送完，避免截断末字。12秒上限与1.2秒尾部窗口还必须严格小于火山30秒请求超时。
+- 首次真机复测在最后一次`false`后1.202秒触发`vad_silence`，148 ms后火山返回空final，证明原30秒悬挂已可被兜底，也暴露旧WakeGate会停在`recognizing`。最终策略是首次空final执行一次本地大笑并重开监听，连续第二次空final以`empty_transcription_limit`正常退出；不调用LLM、不增加turn、不因重复final重复动作。EVA1已真实走完“两次空final→一次笑声→waiting”，无第三次笑声、无failed、ASR和UDP活动数均归零。
+- 修复后EVA1另完成五轮有效问答，五轮都由`partial_stability`收句：首个partial约1.102至4.538秒，端点约3.309至8.304秒，final约0.078至0.196秒；火山ASR、DeepSeek和TTS均无失败。另一次纯等待期间即使收到9次VAD-only事件，也在开放监听后精确约8秒以`idle_timeout`退出，证明环境噪声不能续命。
 - Dispatcher把设备`sound_busy=true`同时纳入新动作准入和完成判据。动作舵机已idle但本地OGG仍播放时，持久命令继续保持moving；只有`action_state=idle`且`sound_busy!=true`才completed，旧固件未上报该字段时保持兼容。WakeGate开场笑声遇到`device_state_unsafe`时也反复查询这两个条件，不把一次idle快照误当作共享音频解码器已经空闲。
 
 ## 3. 端到端数据流
@@ -312,7 +313,7 @@ ASR和TTS当前可以在本机 `.env` 中使用同一个火山项目API Key值�
 
 - 每台设备同一时刻只允许一个活动ASR utterance和一个TTS播放会话；不同设备可并发。
 - 当前45秒对话窗口下有界队列为ASR 750帧、LLM 4项、TTS句子4/PCM 16/Opus 48；各阶段是独立生产者/消费者，队列满或消费者失败必须取消上游并清理。
-- ASR端点同时接受云partial稳定和设备VAD静音事实，但两者竞争同一个一次性输入关闭权；任何迟到帧、重复端点或过期utterance只能丢弃，不能建立第二个云请求。
+- ASR端点同时接受云partial稳定、设备VAD静音与12秒硬上限，三个独立计时器竞争同一个一次性输入关闭权；任何迟到帧、重复端点或过期utterance只能按unmatched/stale/post-endpoint分类丢弃，不能建立第二个云请求。取消路径必须先原子摘除活动utterance，保证下一轮可以立即arm。
 - 云请求使用全局并发信号量，具体上限从配置读取；达到上限进入短有界队列，队列满则明确失败。
 - ASR连接建立前可以重试；音频开始上传后默认不重放整段，避免重复结果和内存膨胀。
 - TTS只有在首个音频块发送前可以重试；发送后失败必须stop并报告部分播放失败。

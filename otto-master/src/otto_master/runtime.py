@@ -495,6 +495,7 @@ class Runtime:
                 ),
             ),
             partial_stability_seconds=config.wake.speech_end_grace_seconds,
+            max_utterance_seconds=config.wake.max_utterance_seconds,
         )
         self.tts_service = TtsService(
             self.message_bus,
@@ -557,6 +558,11 @@ class Runtime:
             "asr": self.asr_service.status(),
             "llm": self.llm_service.status() if self.llm_service is not None else {},
             "tts": self.tts_service.status(),
+            "gate": {
+                key: value
+                for key, value in wake.items()
+                if key not in {"devices", "enabled", "healthy", "state"}
+            },
             "sessions": wake.get("devices", {}),
             "providers": {
                 "asr": self.config.cloud.asr.provider,

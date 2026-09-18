@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import AsyncIterable, AsyncIterator
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Protocol
 
 from ..audio.opus import OpusCodecError, OpusFrameDecoder, OpusParameters
@@ -46,8 +46,7 @@ class _Utterance:
     input_finished: bool = False
     speech_observed: bool = False
     task: asyncio.Task[None] | None = None
-    endpoint_task: asyncio.Task[None] | None = None
-    endpoint_method: str | None = None
+    endpoint_tasks: dict[str, asyncio.Task[None]] = field(default_factory=dict)
 
 
 class AsrService:
@@ -67,6 +66,7 @@ class AsrService:
         chunk_frames: int = 3,
         queue_frames: int = 32,
         partial_stability_seconds: float = 1.2,
+        max_utterance_seconds: float = 12.0,
         logger: logging.Logger | None = None,
     ) -> None:
         if chunk_frames < 1:
@@ -75,12 +75,17 @@ class AsrService:
             raise ValueError("queue_frames must be at least chunk_frames")
         if partial_stability_seconds <= 0:
             raise ValueError("partial_stability_seconds must be positive")
+        if max_utterance_seconds <= partial_stability_seconds:
+            raise ValueError(
+                "max_utterance_seconds must exceed partial_stability_seconds"
+            )
         self.message_bus = message_bus
         self.frame_reader = frame_reader
         self.provider = provider
         self.chunk_frames = chunk_frames
         self.queue_frames = queue_frames
         self.partial_stability_seconds = partial_stability_seconds
+        self.max_utterance_seconds = max_utterance_seconds
         self._logger = logger or logging.getLogger("otto_master.asr")
         self._armed_sessions: dict[str, str] = {}
         self._ignored_utterances: dict[str, tuple[str, str]] = {}
@@ -95,8 +100,12 @@ class AsrService:
         self._endpointed_count = 0
         self._vad_endpointed_count = 0
         self._partial_endpointed_count = 0
+        self._max_duration_endpointed_count = 0
         self._endpoint_discarded_frames = 0
         self._endpoint_preserved_frames = 0
+        self._unmatched_frames = 0
+        self._stale_frames = 0
+        self._post_endpoint_frames = 0
 
     @property
     def running(self) -> bool:
@@ -139,22 +148,32 @@ class AsrService:
         normalized_device = _required(device_id, "device_id")
         normalized_session = _required(session_id, "session_id")
         async with self._lock:
-            if normalized_device in self._active:
-                raise RuntimeError("cannot arm ASR while an utterance is active")
+            active = self._active.get(normalized_device)
+            if active is not None:
+                if active.task is not None and active.task.done():
+                    self._active.pop(normalized_device, None)
+                    self._cancel_endpoint_tasks_locked(active)
+                else:
+                    raise RuntimeError("cannot arm ASR while an utterance is active")
             self._armed_sessions[normalized_device] = normalized_session
 
     async def close_device_input(self, device_id: str, *, cancel_active: bool = True) -> None:
         """Fail closed for future audio and optionally cancel the current utterance."""
 
-        task: asyncio.Task[None] | None = None
+        tasks: list[asyncio.Task[None]] = []
         async with self._lock:
             self._armed_sessions.pop(device_id, None)
             utterance = self._active.get(device_id)
             if cancel_active and utterance is not None:
-                task = utterance.task
-        if task is not None:
+                self._active.pop(device_id, None)
+                tasks.extend(self._cancel_endpoint_tasks_locked(utterance))
+                if utterance.task is not None:
+                    tasks.append(utterance.task)
+        current = asyncio.current_task()
+        pending = tuple(task for task in tasks if task is not current)
+        for task in pending:
             task.cancel()
-            await asyncio.gather(task, return_exceptions=True)
+        await asyncio.gather(*pending, return_exceptions=True)
 
     def status(self) -> dict[str, Any]:
         return {
@@ -170,11 +189,16 @@ class AsrService:
             "queue_frames": self.queue_frames,
             "chunk_frames": self.chunk_frames,
             "partial_stability_seconds": self.partial_stability_seconds,
+            "max_utterance_seconds": self.max_utterance_seconds,
             "endpointed": self._endpointed_count,
             "vad_endpointed": self._vad_endpointed_count,
             "partial_endpointed": self._partial_endpointed_count,
+            "max_duration_endpointed": self._max_duration_endpointed_count,
             "endpoint_discarded_frames": self._endpoint_discarded_frames,
             "endpoint_preserved_frames": self._endpoint_preserved_frames,
+            "unmatched_frames": self._unmatched_frames,
+            "stale_frames": self._stale_frames,
+            "post_endpoint_frames": self._post_endpoint_frames,
         }
 
     async def _handle_started(self, message: Message) -> None:
@@ -219,6 +243,11 @@ class AsrService:
                 self._run_utterance(utterance),
                 name=f"otto-asr-{device_id}-{utterance_id}",
             )
+            self._schedule_endpoint_locked(
+                utterance,
+                "max_duration",
+                self.max_utterance_seconds,
+            )
             self._started_count += 1
             publish_started = True
         if publish_started:
@@ -246,13 +275,20 @@ class AsrService:
         )
         async with self._lock:
             utterance = self._active.get(device_id)
+            if utterance is None:
+                self._dropped_frames += 1
+                self._unmatched_frames += 1
+                return
             if (
-                utterance is None
-                or utterance.session_id != session_id
+                utterance.session_id != session_id
                 or utterance.utterance_id != utterance_id
-                or utterance.input_finished
             ):
                 self._dropped_frames += 1
+                self._stale_frames += 1
+                return
+            if utterance.input_finished:
+                self._dropped_frames += 1
+                self._post_endpoint_frames += 1
                 return
             if packet is None:
                 await self._fail_locked(utterance, "audio_frame_expired")
@@ -291,9 +327,13 @@ class AsrService:
                 return
             if speaking:
                 utterance.speech_observed = True
-                cancelled = self._cancel_endpoint_locked(utterance)
+                cancelled = self._cancel_endpoint_locked(utterance, "vad_silence")
             elif utterance.speech_observed:
-                self._schedule_endpoint_locked(utterance, "vad_silence")
+                self._schedule_endpoint_locked(
+                    utterance,
+                    "vad_silence",
+                    self.partial_stability_seconds,
+                )
         if cancelled is not None:
             await asyncio.gather(cancelled, return_exceptions=True)
 
@@ -302,6 +342,7 @@ class AsrService:
         if fields is None:
             return
         device_id, session_id, utterance_id = fields
+        endpoint_tasks: tuple[asyncio.Task[None], ...] = ()
         async with self._lock:
             ignored = self._ignored_utterances.get(device_id)
             if ignored == (session_id, utterance_id):
@@ -316,15 +357,12 @@ class AsrService:
             ):
                 return
             utterance.input_finished = True
-            endpoint_task = utterance.endpoint_task
-            if endpoint_task is not None:
-                endpoint_task.cancel()
-                utterance.endpoint_task = None
-                utterance.endpoint_method = None
+            endpoint_tasks = self._cancel_endpoint_tasks_locked(utterance)
             try:
                 utterance.queue.put_nowait(None)
             except asyncio.QueueFull:
                 await self._fail_locked(utterance, "audio_backpressure")
+        await asyncio.gather(*endpoint_tasks, return_exceptions=True)
 
     async def _run_utterance(self, utterance: _Utterance) -> None:
         final_seen = False
@@ -358,7 +396,17 @@ class AsrService:
                     final_seen = True
                     self._completed_count += 1
                     break
-                self._schedule_endpoint_locked(utterance, "partial_stability")
+                if result.text.strip():
+                    async with self._lock:
+                        if (
+                            self._active.get(utterance.device_id) is utterance
+                            and not utterance.input_finished
+                        ):
+                            self._schedule_endpoint_locked(
+                                utterance,
+                                "partial_stability",
+                                self.partial_stability_seconds,
+                            )
             if not final_seen:
                 raise CloudProviderError(
                     "asr",
@@ -395,57 +443,86 @@ class AsrService:
                 "asr_processing_failed",
             )
         finally:
-            endpoint_task = utterance.endpoint_task
-            if endpoint_task is not None and endpoint_task is not asyncio.current_task():
-                endpoint_task.cancel()
-                await asyncio.gather(endpoint_task, return_exceptions=True)
+            endpoint_tasks: tuple[asyncio.Task[None], ...] = ()
             async with self._lock:
+                endpoint_tasks = self._cancel_endpoint_tasks_locked(utterance)
                 if self._active.get(utterance.device_id) is utterance:
                     self._active.pop(utterance.device_id, None)
+            await asyncio.gather(*endpoint_tasks, return_exceptions=True)
 
-    def _schedule_endpoint_locked(self, utterance: _Utterance, method: str) -> None:
-        previous = utterance.endpoint_task
+    def _schedule_endpoint_locked(
+        self,
+        utterance: _Utterance,
+        method: str,
+        delay_seconds: float,
+    ) -> None:
+        previous = utterance.endpoint_tasks.get(method)
         if previous is not None and not previous.done():
             previous.cancel()
-        utterance.endpoint_method = method
-        utterance.endpoint_task = asyncio.create_task(
-            self._finish_after_endpoint_stability(utterance, method),
+        utterance.endpoint_tasks[method] = asyncio.create_task(
+            self._finish_after_endpoint_stability(utterance, method, delay_seconds),
             name=f"otto-asr-endpoint-{utterance.device_id}-{utterance.utterance_id}",
         )
 
-    def _cancel_endpoint_locked(self, utterance: _Utterance) -> asyncio.Task[None] | None:
-        previous = utterance.endpoint_task
-        utterance.endpoint_task = None
-        utterance.endpoint_method = None
+    def _cancel_endpoint_locked(
+        self,
+        utterance: _Utterance,
+        method: str,
+    ) -> asyncio.Task[None] | None:
+        previous = utterance.endpoint_tasks.pop(method, None)
         if previous is not None and not previous.done():
             previous.cancel()
             return previous
         return None
 
+    def _cancel_endpoint_tasks_locked(
+        self,
+        utterance: _Utterance,
+        *,
+        exclude: asyncio.Task[None] | None = None,
+    ) -> tuple[asyncio.Task[None], ...]:
+        tasks = tuple(
+            task
+            for task in utterance.endpoint_tasks.values()
+            if task is not exclude and not task.done()
+        )
+        utterance.endpoint_tasks.clear()
+        for task in tasks:
+            task.cancel()
+        return tasks
+
     async def _finish_after_endpoint_stability(
         self,
         utterance: _Utterance,
         method: str,
+        delay_seconds: float,
     ) -> None:
-        await asyncio.sleep(self.partial_stability_seconds)
+        await asyncio.sleep(delay_seconds)
         preserved = 0
         current = asyncio.current_task()
+        cancelled: tuple[asyncio.Task[None], ...] = ()
         async with self._lock:
             if (
                 self._active.get(utterance.device_id) is not utterance
                 or utterance.input_finished
-                or utterance.endpoint_task is not current
-                or utterance.endpoint_method != method
+                or utterance.endpoint_tasks.get(method) is not current
             ):
                 return
             utterance.input_finished = True
             preserved = utterance.queue.qsize()
+            cancelled = self._cancel_endpoint_tasks_locked(
+                utterance,
+                exclude=current,
+            )
             self._endpointed_count += 1
             if method == "vad_silence":
                 self._vad_endpointed_count += 1
-            else:
+            elif method == "partial_stability":
                 self._partial_endpointed_count += 1
+            else:
+                self._max_duration_endpointed_count += 1
             self._endpoint_preserved_frames += preserved
+        await asyncio.gather(*cancelled, return_exceptions=True)
         # No new frames can enter after input_finished is set. Put the sentinel
         # behind every frame already accepted so the cloud stream receives the
         # complete buffered tail instead of truncating the user's last words.
@@ -459,7 +536,7 @@ class AsrService:
                 utterance.utterance_id,
                 {
                     "method": method,
-                    "grace_seconds": self.partial_stability_seconds,
+                    "grace_seconds": delay_seconds,
                     "discarded_frames": 0,
                     "preserved_frames": preserved,
                 },
@@ -484,6 +561,7 @@ class AsrService:
     async def _fail_locked(self, utterance: _Utterance, code: str) -> None:
         if self._active.get(utterance.device_id) is utterance:
             self._active.pop(utterance.device_id, None)
+        self._cancel_endpoint_tasks_locked(utterance)
         task = utterance.task
         if task is not None and task is not asyncio.current_task():
             task.cancel()

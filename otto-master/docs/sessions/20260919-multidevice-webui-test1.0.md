@@ -44,7 +44,7 @@
 5. WebUI可对1至16台显式选中设备批量进入或退出循环对话；命令经Message Bus和正式设备Gateway逐台下发、逐台关联ACK，不能借用8080诊断链、原始MQTT或浏览器直连设备。
 6. 固件2.0.15仅替换中央大眼表情区为用户提供的看山图片；顶部状态栏和底部对话文字保持原布局。动作实际开始时切换对应动作图，结束或stop后恢复最新基础表情。
 7. 降低动作任务优先级以减少舵机插值对音频链的抢占，并一次性把设备输出音量迁移到100；Server状态和真机心跳提供可验证证据。
-8. ASR除云partial稳定端点外，增加“本轮已说话后VAD连续静音1.2秒”兜底；云端无partial时不得再硬等30秒。空final只触发一次本地大笑并重开监听，不能卡在recognizing或调用LLM。
+8. ASR使用相互独立的云partial稳定、已说话后VAD连续静音1.2秒和12秒硬上限三个端点；VAD抖动不得续掉partial或硬上限，云端无partial时不得再硬等30秒。首次空final只触发一次本地大笑并重开监听，连续第二次正常退出，不能卡在recognizing、无限大笑或调用LLM。
 9. Dispatcher将本地`sound_busy`纳入动作准入与完成，避免舵机先idle时提前放行下一动作；WebUI提供显式多设备快捷动作和目录自动verify。
 10. 本机WebUI新标签页可通过只限loopback且不进入HTTP的fragment一次性装入控制令牌并立即清除地址栏；LAN访问仍需显式认证。
 
@@ -116,7 +116,7 @@ Otto Master仓库：
 - 是否需要局域网：是
 - 是否需要Windows验证：是，GitHub Actions；实体Windows仍不属于本轮可证明范围
 - 是否需要MQTT Broker：内嵌真Broker
-- 是否需要EVA真机：EVA1必需；EVA2当前关机，真实双机为可选补测，软件双设备隔离为必需
+- 是否需要EVA真机：EVA1必需；EVA2已重新在线但本次对话优先修复不触碰，真实双机为可选补测，软件双设备隔离为必需
 - 固件版本：EVA1目标`2.0.15`；EVA2保持原状态且不主动触碰
 - 预期传输：MQTT控制/信令 + AES-CTR UDP Opus
 - 安全清理：每次动作/语音测试结束stop并确认EVA1 idle、无活动音频session
@@ -160,9 +160,11 @@ Otto Master仓库：
 
 ### ASR端点与空结果恢复
 
-- partial稳定与设备VAD静音是同一utterance的竞争端点，只有一个路径能关闭输入。VAD路径必须先看见`speaking=true`；开始说话前的`false`不能误触发。
+- partial稳定、设备VAD静音与12秒硬上限是同一utterance的三个独立竞争端点，只有一个路径能关闭输入。VAD路径必须先看见`speaking=true`；开始说话前的`false`不能误触发，后续`true`也只能取消VAD计时，不能取消partial或硬上限。
 - 连续静音1.2秒后先设置`input_finished`，再把sentinel排在已接收PCM尾帧之后；新帧丢弃，既有尾帧不能截断。
-- 空白final不送DeepSeek、不上屏、不增加turn。WakeGate只安排一次本地`laugh`并重新走笑声完成门禁；重复或过期final被忽略。
+- 任何端点或关闭路径都先从活动表原子摘除utterance，再取消其余任务；迟到帧按unmatched/stale/post-endpoint分类，不得卡住下一轮arm。
+- 空白final不送DeepSeek、不上屏、不增加turn。同一session首次空白只安排一次本地`laugh`并重新走笑声完成门禁，连续第二次以`empty_transcription_limit`正常关闭；重复或过期final被忽略。
+- WakeGate的8秒退出只由当前轮非空ASR partial取消；设备本地VAD继续服务于ASR端点，但不能用环境噪声或扬声器尾音给对话续命。
 
 ### 动作与本地音效完成边界
 
@@ -182,21 +184,21 @@ Otto Master仓库：
 
 | 编号 | 二元验收标准 | 验证命令或人工步骤 | 必需 | 最终状态 | 证据 |
 |---|---|---|---|---|---|
-| A1 | TTS 2.0倍增益、正负钳位、unity和奇数字节拒绝精确通过 | `uv run pytest -q tests/test_tts.py tests/test_config.py` | 是 | PASS | 增益实现、配置边界及跨Provider块半采样回归均通过；全量176项包含该覆盖 |
+| A1 | TTS 2.0倍增益、正负钳位、unity和奇数字节拒绝精确通过 | `uv run pytest -q tests/test_tts.py tests/test_config.py` | 是 | PASS | 增益实现、配置边界及跨Provider块半采样回归均通过；全量183项包含该覆盖 |
 | A2 | LLM丢弃未朗读短前缀；完整句子先播完并stop后再执行唯一工具 | `uv run pytest -q tests/test_llm.py tests/test_wake_gate.py` | 是 | PASS | 顺序断言覆盖`answer:stop < tool:execute`；瞬时笑声状态查询超时会在总时限内重试 |
 | A3 | 两个fake设备批量动作并发、结果隔离、空目标/通配/未确认拒绝，批量stop清理 | `uv run pytest -q tests/test_web.py tests/test_dispatcher.py` | 是 | PASS | fake双设备并发、独立结果和拒绝路径通过；EVA1真实两次3步前进、左转、太空步及stop均completed，同设备重叠点击正确串行 |
 | A4 | 对话快照按设备/session隔离并包含ASR、助手文字、工具结果；敏感/音频字段不泄漏 | `uv run pytest -q tests/test_web.py tests/test_runtime.py` | 是 | PASS | 投影跨设备、旧session、文字保留/替换及脱敏回归通过 |
 | A5 | WebUI具备多选目标、快捷/高级批量控制、组件健康和独立对话泳道，前端语法通过 | `node --check src/otto_master/web/app.js`及HTTP浏览器/API烟测 | 是 | PASS | 新授权页事件流在线，目录自动恢复15项；真实前进/转向/太空步从`webui:batch`进入MQTT并completed；授权徽标、未授权控件锁定及常驻错误已覆盖，旧8080进程已停止；Node语法通过 |
 | A5b | 批量对话start/stop经正式Message Bus和设备Gateway逐台关联ACK，显式目标/确认/能力门禁及结果隔离通过 | 协议、Service、Web与Runtime自动测试；EVA1真实start→新session→stop→waiting | 是 | PASS | 软件隔离/拒绝路径通过；EVA1固件2.0.15先回关联ACK再异步切换音频，真实start约104 ms接受，stop约19 ms接受并回waiting |
-| A5c | 云端无partial时VAD静音1.2秒仍能收句；空final不调用LLM且只笑一次重开监听；动作等待本地音效排空 | ASR/WakeGate/Dispatcher自动回归与EVA1故障复现 | 是 | IN PROGRESS | 491帧/零partial故障已复现；修复后真机1.202秒触发`vad_silence`且不再30秒超时，空final、sound drain及开场笑声等待idle+非busy自动回归通过；空final重开监听待真机复验 |
+| A5c | partial/VAD/12秒硬上限独立竞争；连续空final有界退出；VAD-only不续8秒窗口；动作等待本地音效排空 | ASR/WakeGate/Dispatcher自动回归与EVA1故障复现 | 是 | PASS | 491帧/零partial故障由VAD在1.202秒兜底；EVA1随后完成五轮partial稳定问答、语音前进、两次空final熔断及9次VAD-only下精确8秒退出，最终ASR/UDP为0 |
 | A6 | 固件恰有21个表情与22个动作贴图；中央图替换且状态栏/底部文字路径保持 | 静态断言、ESP-IDF完整构建和EVA1真机观察 | 是 | IN PROGRESS | 43个描述符纳入构建，2.0.15完整构建和OTA通过；动作图切换/恢复仍待用户目视确认 |
 | A7 | EVA1升级2.0.15后动作图随实际动作切换并恢复，心跳显示音量100，动作最终idle | OTA回连、heartbeat、低风险动作、stop/idle及用户目视确认 | 是 | IN PROGRESS | EVA1回连报告2.0.15与音量100，多种真实动作completed且最终idle；只缺目视确认 |
-| A8 | 真实火山TTS经2.0倍增益与设备音量100播放，EVA1可清楚听见且无明显削波/卡顿 | 真实短句TTS播放、遥测清理及用户听感确认 | 是 | IN PROGRESS | 服务状态确认增益2.0、设备心跳确认100；等待用户试听结论 |
-| A9 | 自动门禁与跨平台CI通过 | `uv lock --check`; Ruff; mypy; 全量pytest; `git diff --check`; GitHub macOS/Windows jobs | 是 | IN PROGRESS | 本地锁文件、Ruff、mypy（38个源码文件）、176项pytest、Node语法和diff check通过；CI待push |
-| A10 | EVA1+EVA2真实同时在线、并发对话/控制不串线 | EVA2开机后真机双设备测试 | 否 | NOT RUN | EVA2当前由用户关机；不能用fake冒充真机通过 |
+| A8 | 真实火山TTS经2.0倍增益与设备音量100播放，EVA1可清楚听见且无明显削波/卡顿 | 真实短句TTS播放、遥测清理及用户听感确认 | 是 | PASS | 服务状态确认增益2.0、设备心跳确认100，五轮TTS全部完成；用户确认“对话感觉没问题了” |
+| A9 | 自动门禁与跨平台CI通过 | `uv lock --check`; Ruff; mypy; 全量pytest; `git diff --check`; GitHub macOS/Windows jobs | 是 | IN PROGRESS | 本地锁文件、Ruff、mypy（38个源码文件）、183项pytest、Node语法和diff check通过；run 35400612369的macOS成功、Windows因测试专用10 ms时限失败，已放宽为跨平台安全时限，最终CI待本轮push |
+| A10 | EVA1+EVA2真实同时在线、并发对话/控制不串线 | 两台设备在线后真机双设备测试 | 否 | NOT RUN | EVA2已重新在线但本次对话修复未向其下发任何动作或语音命令；不能用在线状态或fake冒充双机真机通过 |
 | A11 | 结束时EVA1 idle、活动语音/UDP session为0，无遗留测试进程 | 只读健康、设备与会话状态检查 | 是 | PASS | EVA1 online/idle、sound_busy=false；WakeGate sessions与UDP sessions均为0，Dispatcher active/queued均为0 |
 
-只有A1-A9（含A5b、A5c）与A11全部PASS才允许形成`test1.0`验收提交。A10若设备保持关机必须如实记录NOT RUN，但不冒充双机真机验收。
+本次对话加固检查点要求A1-A5c、A9本地门禁与A11通过后才可提交；完整`test1.0`验收仍要求A6-A9与A11全部PASS。A10允许NOT RUN，但不得用设备在线状态或fake冒充双机真机验收。
 
 ## 非目标
 
@@ -209,11 +211,11 @@ Otto Master仓库：
 
 ## 风险
 
-- 2.0倍PCM增益可能让已经接近满幅的TTS发生钳位；实现必须饱和而非整数回绕，并通过短句真人听感确认。若有明显破音，下一轮应使用压缩/限幅而非继续提高硬增益。
+- 2.0倍PCM增益可能让已经接近满幅的TTS发生钳位；实现必须饱和而非整数回绕。当前用户真人听感已PASS；若后续文本出现明显破音，下一轮应使用压缩/限幅而非继续提高硬增益。
 - DeepSeek流式顺序不稳定；仅允许丢弃尚未进入TTS的短前缀，不能撤回已经播放的语音。
 - 批量动作有物理风险；WebUI必须展示精确目标并要求确认，真机默认只用低风险原地动作。
 - 看山C数组占用Flash；构建必须检查app分区余量。
-- EVA2离线意味着本轮只能证明软件双设备并发，不能声称真实双机语音已通过。
+- EVA2虽已重新在线，但本轮没有向其发送语音或动作命令，只能证明软件双设备并发，不能声称真实双机语音已通过。
 
 ## 回滚点
 
@@ -247,7 +249,7 @@ push test1.0 → verify remote hash → GitHub macOS/Windows success
 | 1 | LLM/WakeGate定向测试 | FAIL | 新断言引用`LlmSentence`但测试文件漏导入 | 补齐显式导入 | 47项定向测试通过 |
 | 2 | 全量pytest | FAIL | 旧UDP测试直接构造`AudioConfig`时没有新增增益字段；本机`.env`启用控制台令牌后旧Runtime WebSocket测试未隔离环境 | `AudioConfig`提供安全unity构造回退；Runtime测试显式关闭控制台令牌 | 加入配置边界覆盖后全量161项通过 |
 | 3 | EVA1真实循环对话 | FAIL | DeepSeek先输出完整句子再给工具导致`mixed_text_and_tool_call`；一次笑声状态查询瞬时超时导致session失败 | 完整句子TTS结束后串行工具；笑声查询在总门限内重试瞬时超时 | 自动顺序/重试回归通过，真实复测待最终试听 |
-| 4 | TTS真机音量 | FAIL | 用户确认1.5倍增益与设备音量90仍偏小 | 服务端改为2.0倍；EVA1音量升至100并固化在2.0.13 | OTA回连、版本与音量遥测通过；主观听感待确认 |
+| 4 | TTS真机音量 | FAIL | 用户确认1.5倍增益与设备音量90仍偏小 | 服务端改为2.0倍；EVA1音量升至100并固化在2.0.13 | OTA回连、版本与音量遥测通过；修复后五轮问答完成，用户确认对话感觉无问题，主观PASS |
 | 5 | 正式Web对话start | FAIL | 固件先同步打开音频通道再回ACK，UDP协商可能超过Server 3秒关联等待，设备实际开始但控制面假超时 | 2.0.15在主循环先发送并缓存ACK，再异步执行会话切换 | EVA1真实start约104 ms ACK，随后新MQTT/UDP session建立；stop约19 ms ACK并回waiting |
 | 6 | 03:45与当前卡顿对比 | FAIL | 顺滑回合1.1至3.1秒持续收到火山partial；故障轮491帧和VAD已到Server但零partial，旧ASR只靠partial端点并等满30秒 | 增加已说话后的VAD静音1.2秒端点，保留队列尾帧 | 真机最后一次VAD false后1.202秒收句，148 ms收到云final；30秒悬挂消失 |
 | 7 | VAD兜底首次复测 | FAIL | 火山返回空final，WakeGate因直接忽略空文本而永久停在recognizing | 空final不进LLM，幂等切到laughing，完成一次本地笑声后重开监听 | 自动回归覆盖空白与重复final且只新增一次动作；真机复验待完成 |
@@ -255,17 +257,20 @@ push test1.0 → verify remote hash → GitHub macOS/Windows success
 | 9 | 动作/音效生命周期 | FAIL | 舵机idle快于本地OGG，旧Dispatcher可能提前completed并放行下一动作；一次旧采样仅证明查询瞬间仍busy | 准入拒绝`sound_busy=true`，完成同时等待action idle和sound非busy | 自动测试证明idle/busy期间保持moving；EVA1一歩walk在本地音效结束后5.31秒completed |
 | 10 | WebUI再次点击前进 | FAIL | 正式8081没有新命令、消息或MQTT发布，EVA1仍online/idle；本机同时遗留8080诊断入口，页面也未持续区分只读可见与控制授权 | 停止旧8080进程；增加授权徽标、无/失效令牌控件锁定、401聚焦及常驻提交状态 | 修复后用户从8081真实执行前进、抖动、弯腰和大笑，均进入`webui:batch`并completed；入口/授权问题复验通过 |
 | 11 | WebUI修复后连续动作 | PARTIAL | 前进、抖动、弯腰和大笑均completed且动作图遥测正确；合法三步`swing`在15.254秒被统一完成时限误判并触发安全stop | 生产`completion_timeout_seconds`提高到30，ACK仍为3秒，超时安全stop不取消 | 前四项及后续两次前进真机通过；30秒门限下的`swing`待重启后复验 |
+| 12 | 对话再次卡顿 | FAIL | shared endpoint timer被VAD true/false反复取消和覆盖，已收到的partial稳定端点也会丢失；极端轮最终触发火山30秒超时并遗留活动utterance | partial、VAD静音和12秒硬上限改为独立任务；关闭先原子摘除活动utterance，迟到帧分类统计 | 自动回归证明持续VAD抖动不能取消partial/硬上限；EVA1五轮均以partial稳定正常收句，ASR无失败 |
+| 13 | 空识别与静默循环 | FAIL | 单次空final恢复后若仍为空会继续笑；设备VAD受噪声/扬声器尾音抖动，可不断取消8秒退出 | 同一session只允许一次空识别笑声重试，第二次正常退出；WakeGate只接受非空ASR partial作为讲话证据 | 真机两次空final后无第三次笑声并回waiting；另一次收到9次VAD-only仍在约8秒`idle_timeout`退出，ASR/UDP为0 |
+| 14 | 首次test1.0 CI | FAIL | run `35400612369` macOS全绿，Windows唯一失败为笑声状态查询重试测试使用10 ms响应时限，慢runner连续错过测试响应 | 测试仍保留“首个查询丢失后重试”语义，单查询/总时限改为0.1/1秒，不放宽生产配置 | 本地183项通过；修复提交后的macOS/Windows run待push后确认 |
 
 ## 实际结果
 
 - 类型检查：mypy strict通过，38个源码文件无问题
-- 单元测试：全量176项通过
-- 集成测试：内嵌MQTT、HTTP/WebSocket、快捷/批量控制、正式对话控制、控制授权可见性、对话投影、ASR双端点、空final恢复、音效排空及Runtime生命周期均在全量测试中通过
+- 单元测试：全量183项通过
+- 集成测试：内嵌MQTT、HTTP/WebSocket、快捷/批量控制、正式对话控制、控制授权可见性、对话投影、ASR三端点/原子清理、连续空final熔断、VAD-only静默退出、音效排空及Runtime生命周期均在全量测试中通过
 - 固件构建：ESP-IDF 5.5.5完整构建2.0.15，应用镜像3,830,880字节，SHA256 `e1ca9051c8f6a2aac1bef3e47323c1927ef6bebc3b901ae52bc393f9ad4595e6`
 - 固件Git：`howtion0/otto`远端`codex/otto-portable@c6addc6a35bf54c6c28f07fde53828cd73bce1f0`，本地与远端SHA一致
-- 硬件测试：进行中；2.0.15 OTA/回连、音量100遥测、正式对话start/stop、VAD兜底收句及多种WebUI动作已取得客观证据；空final重开监听、表情切换与TTS听感待用户最终确认
-- 实际设备与传输：EVA1 / MQTT+UDP；EVA2离线
-- stop与idle清理：批量stop已接受并完成；当前EVA1 online/idle、无活动语音或UDP session、无在途命令
+- 硬件测试：对话客观和主观门禁PASS；EVA1完成五轮流式问答、语音前进、空识别熔断、按钮退出与8秒静默退出，用户确认当前对话感觉无问题。仅表情切换仍待用户最终目视确认
+- 实际设备与传输：EVA1 / MQTT+UDP；EVA2在线但本次未触碰
+- stop与idle清理：当前EVA1 online/idle、WakeGate waiting、无活动ASR/UDP session或在途命令
 
 ## Gate 5：文档收尾
 
@@ -278,9 +283,9 @@ push test1.0 → verify remote hash → GitHub macOS/Windows success
 ## Gate 6：测试支线上传
 
 - 测试支线：`test1.0`
-- 验收提交：待生成
-- push结果：未执行
-- 远程commit：待生成
-- 本地HEAD与远程一致：否
+- 已有检查点：`b4a694b1c5b6bf39bdb4cb4288b42cfc27268876`，已推送；对应run `35400612369`为macOS成功、Windows测试时限失败
+- 本轮对话加固提交：待生成
+- 本轮push结果：待执行
+- 本地HEAD与远程一致：当前代码尚未提交
 - 本轮是否获单独授权合并main：否
 - 本轮是否获单独授权tag或正式发布：否

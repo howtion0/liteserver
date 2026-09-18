@@ -231,7 +231,7 @@ offline → sleeping → wake_check → ack_playing
 
 ### ASR
 
-输入按设备隔离的音频描述或短期 `frame_ref`，管理一个utterance的开始、partial、final、失败和取消，输出规范化转写结果。当前以3个60 ms帧聚合成180 ms PCM块发送火山；设备auto模式缺少listen/stop时采用双端点：优先使用非空partial稳定1.2秒，同时在已经观测到本轮`VAD speaking=true`后，以连续1.2秒`false`兜底。两种路径都先锁住新帧、排空已接收队列，再发送云端结束包；开始说话前的`false`不能误收句。不得判断唤醒词或机器人动作，也不得持久化原始音频。
+输入按设备隔离的音频描述或短期 `frame_ref`，管理一个utterance的开始、partial、final、失败和取消，输出规范化转写结果。当前以3个60 ms帧聚合成180 ms PCM块发送火山；设备auto模式缺少listen/stop时采用三个相互独立的端点计时器：非空partial稳定1.2秒、已经观测本轮`VAD speaking=true`后的连续1.2秒静音，以及从utterance开始计时的12秒硬上限。VAD重新变为true只取消VAD静音计时，不能取消已经运行的partial稳定或硬上限；任一端点获胜后都一次性锁住新帧、取消其余计时器、排空已接收队列，再发送云端结束包。开始说话前的`false`不能误收句，关闭或取消时先从活动表原子摘除utterance，迟到帧只分类丢弃，不能阻止下一轮arm。不得判断唤醒词或机器人动作，也不得持久化原始音频。
 
 ### LLM
 
@@ -252,11 +252,11 @@ offline → sleeping → wake_check → ack_playing
 - 管理每台设备隔离的`waiting → laughing → listening → recognizing → answering`状态和超时。
 - 每轮先触发本地约2秒`laugh`，必须观测`sound.busy=true → false`后才准入下一条utterance；单次状态查询超时在总笑声门限内重试，始终未观测完整边沿才失败关闭。笑声和回答阶段的输入失败关闭。
 - ASR final驱动DeepSeek与TTS；回答播放完成后在同一设备session重新进入`laughing`，完成下一次笑声门禁后才开放下一条utterance。
-- ASR final为空白时不进入LLM，也不留在`recognizing`；WakeGate按“听不懂”语义只执行一次本地大笑，然后重新开放一个新utterance。重复/过期空final不能重复触发动作。
+- ASR final为空白时不进入LLM，也不留在`recognizing`；同一session首次空final按“听不懂”语义只执行一次本地大笑并重新开放新utterance，若下一轮仍为空则以`empty_transcription_limit`正常关闭，避免无限大笑。重复/过期空final不能重复触发动作；只有有效非空final会清零连续空识别计数，partial只负责证明讲话和端点。
 - ASR final也可驱动一个受限工具调用；若模型先提交完整前置句，WakeGate等待TTS完成并stop后才调用工具，禁止语音和舵机重叠。成功动作等待Dispatcher真实`completed`后直接进入下一轮笑声门禁，不朗读“已完成”。失败只播放固定失败提示。显式`laugh`工具本身完成后复用为下一轮门禁，禁止连续再笑一次。
-- 每次开放监听时启动8秒无讲话计时；精确匹配当前`device_id + session_id + utterance_id`的VAD `speaking=true`或ASR partial会取消计时，纯静默则由Server发送`goodbye`并回到`waiting`。
+- 每次开放监听时启动8秒无讲话计时；只有精确匹配当前`device_id + session_id + utterance_id`的非空ASR partial才是足以取消计时的讲话证据。当前EVA固件的本地VAD会受房间噪声和扬声器尾音影响，因此仅作为ASR端点提示，不延长对话；没有云端文字证据时由Server准时发送`goodbye`并回到`waiting`。
 - Otto按钮在idle时进入循环对话，在connecting/listening/speaking时发送设备`goodbye`退出；设备与Server双方的关闭原因都转换为`voice.session.closed`，不能靠Socket断开猜测用户意图。
-- 任意失败关闭ASR/TTS、尝试安全stop，并发布稳定失败状态；新的不同session允许从`failed`自恢复，不能要求重启Runtime。
+- 任意失败关闭ASR/TTS、尝试安全stop，并发布稳定失败状态；ASR清理先原子移除当前活动utterance再取消后台任务，新的不同session允许从`failed`自恢复，不能要求重启Runtime。
 - 固件本地OGG与云端TTS共享解码/播放队列。本地`PlaySound`只有在压缩队列、解码器、PCM队列和I2S写入全部空闲后才返回；`laugh`动作保持`moving`直到该边沿，避免Dispatcher误等15秒安全超时。
 
 ### 文字上屏边界

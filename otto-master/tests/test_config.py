@@ -24,6 +24,7 @@ def test_repository_config_loads_without_exposing_secret_values() -> None:
     assert config.cloud.llm.input_max_chars == 512
     assert config.cloud.llm.output_max_chars == 96
     assert config.wake.speech_end_grace_seconds == 1.2
+    assert config.wake.max_utterance_seconds == 12
     assert config.wake.idle_timeout_seconds == 8
     assert config.wake.laughter_action == "laugh"
     assert config.cloud.llm.system_prompt is not None
@@ -109,4 +110,26 @@ def test_tts_pcm_gain_rejects_out_of_range_or_non_finite_values(
     )
 
     with pytest.raises(ConfigError, match="audio.tts_pcm_gain"):
+        load_config(target)
+
+
+@pytest.mark.parametrize("invalid", ["1.2", "29"])
+def test_max_utterance_requires_endpoint_and_cloud_timeout_margin(
+    tmp_path: Path,
+    invalid: str,
+) -> None:
+    source = Path(__file__).parents[1] / "config.yaml"
+    target = tmp_path / "config.yaml"
+    contents = source.read_text(encoding="utf-8")
+    assert "  max_utterance_seconds: 12" in contents
+    target.write_text(
+        contents.replace(
+            "  max_utterance_seconds: 12",
+            f"  max_utterance_seconds: {invalid}",
+            1,
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ConfigError, match="wake.max_utterance_seconds"):
         load_config(target)

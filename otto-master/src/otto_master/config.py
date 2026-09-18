@@ -124,6 +124,7 @@ class WakeConfig:
     conversation_timeout_seconds: float
     idle_timeout_seconds: float
     speech_end_grace_seconds: float
+    max_utterance_seconds: float
     laughter_action: str
     laughter_timeout_seconds: float
     state_query_interval_seconds: float
@@ -488,6 +489,33 @@ def load_config(
     asr_api_key_env = _string(cloud_asr, "api_key_env", "cloud.asr")
     llm_api_key_env = _string(cloud_llm, "api_key_env", "cloud.llm")
     tts_api_key_env = _string(cloud_tts, "api_key_env", "cloud.tts")
+    speech_end_grace_seconds = _float(
+        wake,
+        "speech_end_grace_seconds",
+        "wake",
+        minimum=0.1,
+    )
+    max_utterance_seconds = _float(
+        wake,
+        "max_utterance_seconds",
+        "wake",
+        minimum=1.0,
+    )
+    cloud_request_timeout_seconds = _float(
+        cloud,
+        "request_timeout_seconds",
+        "cloud",
+        minimum=0.1,
+    )
+    if max_utterance_seconds <= speech_end_grace_seconds:
+        raise ConfigError(
+            "wake.max_utterance_seconds must exceed wake.speech_end_grace_seconds"
+        )
+    if max_utterance_seconds + speech_end_grace_seconds >= cloud_request_timeout_seconds:
+        raise ConfigError(
+            "wake.max_utterance_seconds plus wake.speech_end_grace_seconds must be "
+            "less than cloud.request_timeout_seconds"
+        )
 
     return AppConfig(
         project=ProjectConfig(name=_string(project, "name", "project")),
@@ -643,9 +671,8 @@ def load_config(
             idle_timeout_seconds=_float(
                 wake, "idle_timeout_seconds", "wake", minimum=0.1
             ),
-            speech_end_grace_seconds=_float(
-                wake, "speech_end_grace_seconds", "wake", minimum=0.1
-            ),
+            speech_end_grace_seconds=speech_end_grace_seconds,
+            max_utterance_seconds=max_utterance_seconds,
             laughter_action=_string(wake, "laughter_action", "wake"),
             laughter_timeout_seconds=_float(
                 wake, "laughter_timeout_seconds", "wake", minimum=1.0
@@ -660,9 +687,7 @@ def load_config(
             fail_closed=_bool(wake, "fail_closed", "wake"),
         ),
         cloud=CloudConfig(
-            request_timeout_seconds=_float(
-                cloud, "request_timeout_seconds", "cloud", minimum=0.1
-            ),
+            request_timeout_seconds=cloud_request_timeout_seconds,
             asr=_provider(cloud_asr, "cloud.asr"),
             llm=_provider(cloud_llm, "cloud.llm"),
             tts=_provider(cloud_tts, "cloud.tts"),

@@ -185,12 +185,12 @@ TTS使用两层状态：`tts.synthesis.*`描述云合成，`tts.playback.*`描�
 
 `test0.9`新增并冻结以下运行时语义：
 
-- `voice.endpoint.detected`表示auto模式下某个一次性服务端端点获胜，payload的`method`为`partial_stability`或`vad_silence`。后者必须先在同一`device_id + session_id + utterance_id`观测`speaking=true`，再连续静音达到配置窗口；ASR随后停止接收新帧、排空已入队音频并请求Provider final。它不等同设备发送了`listen/stop`。
+- `voice.endpoint.detected`表示auto模式下某个一次性服务端端点获胜，payload的`method`为`partial_stability`、`vad_silence`或`max_duration`。三个计时器相互独立：非空partial稳定达到配置窗口；VAD路径必须先在同一`device_id + session_id + utterance_id`观测`speaking=true`再连续静音；硬上限从utterance开始计时，生产值为12秒。VAD重新变为true只取消`vad_silence`，不得续掉partial或硬上限。获胜者一次性停止接收新帧、取消其他端点、排空已入队音频并请求Provider final。它不等同设备发送了`listen/stop`。
 - ASR、LLM和TTS之间使用有界生产者/消费者队列；取消、队列满和下游失败必须向上游传播，不能遗留后台生产任务。
-- `audio.input.activity`至少携带`device_id + transport + session_id + utterance_id + speaking`；只有精确匹配当前轮且`speaking=true`才能取消8秒静默计时，旧轮、跨设备和`false`事件不能延长窗口。
-- ASR final的`text`允许为空以保留Provider事实，但空白final不得上屏、调用LLM或永久停在`recognizing`；WakeGate只触发一次本地笑声并重新开放下一条utterance，重复或过期final无效。
+- `audio.input.activity`至少携带`device_id + transport + session_id + utterance_id + speaking`；它可参与ASR的VAD静音端点，但不能取消WakeGate的8秒无讲话计时。只有精确匹配当前轮的非空`voice.transcription.partial`可取消该计时，旧轮、跨设备、空partial和VAD抖动均不能延长窗口。
+- ASR final的`text`允许为空以保留Provider事实，但空白final不得上屏、调用LLM或永久停在`recognizing`；同一session首次空final只触发一次本地笑声并重新开放下一条utterance，连续第二次以`empty_transcription_limit`正常关闭，重复或过期final无效。只有有效非空final会清零连续空识别计数，partial只负责讲话证据与端点。
 - 正常回答完成后不关闭设备session，而是重新进入`laughing`；本地笑声完成后用一次`tts start → stop`让固件建立新的`listen/start`和utterance，再进入下一轮识别。
-- 8秒内没有真实VAD/partial时，Server发送`goodbye`并发布`voice.session.closed(reason=server_goodbye)`；按钮退出由设备发送`goodbye`并发布`voice.session.closed(reason=device_goodbye)`。两者都必须回到`waiting`并释放音频引用。
+- 8秒内没有非空ASR partial时，Server发送`goodbye`并发布`voice.session.closed(reason=server_goodbye)`；按钮退出由设备发送`goodbye`并发布`voice.session.closed(reason=device_goodbye)`。两者都必须回到`waiting`并释放音频引用。
 - 异常关闭仍失败关闭；失败状态只允许由新的不同session重新开始，迟到的旧session消息不能复活对话。
 
 ### 7.1 设备文字上屏映射

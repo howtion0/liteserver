@@ -247,7 +247,7 @@
 
 - 根因：本地OGG与云端TTS共用固件解码/播放队列；旧顺序先发`tts start`触发`ResetDecoder`再播本地笑声，会清空或打断笑声。旧笑声还是20 ms Opus包，而当前输出链以60 ms为基线。另一个真机问题是无舵机`laugh`瞬间回idle，Dispatcher看不到`moving → idle`，会占住命令15秒并取消下一轮笑声。
 - 固件：笑声转为约2.0065秒、24 kHz OpusHead、单声道、34个60 ms包；`PlaySound`等待压缩队列、解码、PCM队列和I2S写入全部排空。`laugh`保持moving直到音频结束，按钮改为idle进入循环、对话态发送goodbye退出，并增加VAD上报与WebSocket关闭消息。
-- Server：WakeGate变为`waiting → laughing → listening → recognizing → answering → laughing...`；每轮都必须观测`sound.busy true→false`。当前轮VAD/partial取消8秒静默计时；超时由Server关闭，按钮goodbye正常退出；不同新session可从失败状态恢复。
+- Server：WakeGate变为`waiting → laughing → listening → recognizing → answering → laughing...`；每轮都必须观测`sound.busy true→false`。当时实现由当前轮VAD/partial取消8秒静默计时；后续`test1.0`真机证明VAD会受噪声影响，现已收窄为仅非空partial。超时由Server关闭，按钮goodbye正常退出；不同新session可从失败状态恢复。
 - 真机：EVA1经局域网OTA升级至2.0.11。真实回合识别“没事。”并播放回答后再次大笑、进入下一轮；设备goodbye退出和新session重入均出现。2.0.11连续两个独立笑声门禁均出现`moving/laugh/busy=true → idle/false`，第二次约2.1秒完成；另一次监听8秒后以`idle_timeout`退出，UDP sessions=0、EVA1 idle。
 - 工具边界：DeepSeek当前是纯文本SSE，没有请求`tools/tool_choice`，也不消费`tool_calls`；“大笑、前进、后退”等自然语言不会调用Dispatcher。提示词中的`self.otto.*`仍只是合同，下一步必须实现真实工具桥和Schema校验。
 - 验证：ESP-IDF 5.5.5完整构建2.0.11，应用镜像3,788,720字节，SHA256 `4c4298363b621599ea11c8daba2dc3efbc644538666a9f10f7115ece49e200bf`；Otto Master `127 passed`，Ruff、mypy strict（36个源码文件）、Node语法、锁文件和两仓`git diff --check`通过。
@@ -273,12 +273,23 @@
 - 对话修复：真实DeepSeek曾先输出完整句子再返回工具，旧逻辑以`mixed_text_and_tool_call`失败；现改为未成句前缀丢弃，已提交完整句子先完成TTS并stop，再串行执行唯一工具。另一次笑声状态查询瞬时超时现会在总门限内重试；始终没有完整busy边沿仍失败关闭。
 - 音量：TTS Service在Opus编码前对24 kHz S16LE PCM应用可配置饱和增益并正确处理跨Provider块的半个采样。首轮1.5倍短句烟测为113,398 PCM字节、峰值30,365→32,768、RMS 4,338.5→6,412.2、饱和样本约0.32%；用户仍反馈偏小，最终生产配置改为2.0。
 - 固件：中央旧大眼GIF替换为21个看山对话表情与22个动作贴图描述符；顶部状态栏及底部ASR/回答文字不变，动作开始覆盖中央图，结束/stop恢复最近基础表情。动作任务优先级降至3，持久输出音量迁移至100。
-- ASR加固：03:45左右顺滑回合均在1.1至3.1秒收到火山partial；05:21故障轮已上传491个60 ms帧且VAD正常，却没有任何partial，旧逻辑因此等到30秒超时。ASR现以partial稳定或“已说话后VAD静音1.2秒”双端点竞争一次性收句并保留队列尾帧；真机复测在1.202秒触发`vad_silence`。火山随后返回空final暴露WakeGate卡在recognizing，已修为只笑一次并重开监听且不调用LLM，自动回归通过、真机恢复待复验。
+- ASR加固：03:45左右顺滑回合均在1.1至3.1秒收到火山partial；05:21故障轮已上传491个60 ms帧且VAD正常，却没有任何partial，旧逻辑因此等到30秒超时。首轮先增加说话后VAD静音1.2秒兜底并在真机1.202秒收句；后续又发现共享计时器会被VAD抖动覆盖，最终改为partial/VAD/12秒硬上限三个独立端点并保留队列尾帧。空final从一次恢复扩展为连续第二次正常退出，真机恢复已通过。
 - 动作加固：Dispatcher把`sound_busy=true`纳入准入和完成判据，舵机先idle而本地OGG未排空时命令保持moving。WakeGate开场笑声若被`device_state_unsafe`拒绝，不再只查询一次或在idle+busy时空转，而是在有界截止时间内反复查询到action idle且sound非busy再提交。EVA1最短walk经正式批量API在91 ms收到ACK、5.31秒completed；随后用户从新WebUI真实完成两次3步前进、一次左转和一次太空步，同设备重叠点击保持串行。
 - 正式对话控制：固件2.0.15对`otto_conversation`先回关联ACK再异步切换可能阻塞的音频通道；EVA1真实start约104 ms接受并建立MQTT/UDP session，stop约19 ms接受并回waiting。
 - 构建与OTA：ESP-IDF 5.5.5完整构建2.0.15，镜像3,830,880字节，SHA256 `e1ca9051c8f6a2aac1bef3e47323c1927ef6bebc3b901ae52bc393f9ad4595e6`。EVA1 OTA后hello确认2.0.15，运行态确认音量100；Server健康状态确认TTS增益2.0、EVA1 MQTT online。
 - 固件提交：上述2.0.15源码已精确提交并推送到`howtion0/otto`的`codex/otto-portable@c6addc6a35bf54c6c28f07fde53828cd73bce1f0`；远端SHA复核一致，未推main、未创建tag。
-- 真机：正式Web控制已完成多种动作和对话start/stop，最终idle；EVA2保持关机，没有把fake双设备并发冒充真机双设备通过。动作图切换/恢复、修复后完整问答和2.0倍TTS的清晰度、卡顿、削波仍待用户主观确认。
-- 自动验证：首轮全量测试暴露旧`AudioConfig`直接构造缺省值和本机控制台令牌污染Runtime WebSocket测试，分别用安全unity回退和显式测试环境隔离修复；后续新增ASR双端点、空final、音效排空和WebUI授权回归。最终`uv lock --check`、Ruff、mypy strict（38个源码文件）、176项pytest、Node语法和`git diff --check`通过；正式test1.0 CI待最终提交/push。
+- 真机：正式Web控制已完成多种动作和对话start/stop，最终idle；EVA1后续完成五轮问答、语音动作、空识别熔断和8秒静默退出，用户确认当前“对话感觉没问题了”，2.0倍TTS与整体流畅度主观PASS。EVA2已重新在线但本轮未触碰，没有把在线状态或fake双设备并发冒充真机双设备通过。动作图切换/恢复仍待用户目视确认。
+- 自动验证：首轮全量测试暴露旧`AudioConfig`直接构造缺省值和本机控制台令牌污染Runtime WebSocket测试，分别用安全unity回退和显式测试环境隔离修复；后续新增ASR三端点/原子清理、连续空final、VAD-only静默、音效排空和WebUI授权回归。最终`uv lock --check`、Ruff、mypy strict（38个源码文件）、183项pytest、Node语法和`git diff --check`通过；上一run Windows测试时限问题已修，最终CI待本轮push。
 - 运行链路：EVA1继续使用“MQTT控制/信令 + AES-128-CTR UDP Opus → 本机Otto Master → 火山ASR/TTS + DeepSeek”，不是官方小智云后端。
 - 排除：根目录用户`README.md`、`.DS_Store`、贴图源目录与ZIP、`.env`、数据库、日志、构建输出和固件二进制不进入提交；密钥未写入文档或Git差异。
+
+### 2026-09-19 / test1.0 / EVA1对话端点、空识别与静默退出收口
+
+- 排除账户原因：DeepSeek余额接口仍返回可用，火山ASR与TTS在同轮真实调用均成功；卡顿轮的直接错误是ASR等待30.048秒超时，不是已证实的欠费或Key失效。
+- 根因：旧ASR只有一个共享endpoint task，VAD true/false会不断取消或覆盖已经开始的partial稳定计时；设备VAD又会受房间噪声和扬声器尾音影响。空final恢复没有连续次数上限，ASR取消还可能在任务完成前暂留活动utterance。
+- Server修复：partial稳定、说话后VAD静音与12秒硬上限改为三个独立一次性端点；VAD true只取消VAD静音计时，获胜路径排空尾帧并取消其余计时器。关闭先原子摘除活动utterance，迟到帧分为unmatched/stale/post-endpoint。配置强制`max_utterance + speech_grace < cloud_timeout`。
+- WakeGate修复：仅当前轮非空ASR partial可以取消8秒无讲话计时；VAD保留为ASR端点提示但不再给对话续命。首次空final只笑一次并重开，连续第二次以`empty_transcription_limit`正常关闭，只有有效非空final清零连续空识别计数；Runtime状态公开相关计数但不公开音频或Provider敏感字段。
+- EVA1真机：一轮连续两次空final后只发生一次恢复笑声，随后回waiting且无第三次笑声/failed；另一轮完成五次有效问答，均由`partial_stability`收句，端点约3.309至8.304秒、final约0.078至0.196秒，五次TTS全部完成。“奶酪前进”正确进入`self_otto_walk_forward`并由Dispatcher完成动作，按钮`device_goodbye`退出正常。
+- 静默门禁：独立会话中设备继续产生9次VAD-only事件，WakeGate仍在开放监听后约8秒以`idle_timeout`退出；最终EVA1 waiting/idle，活动ASR与UDP session均为0。EVA2虽重新在线但本轮未向其下发语音或动作命令。
+- 用户验收：在上述修复后的EVA1链路上，用户确认“对话感觉没问题了”；当前对话流畅度、设备音量100与服务端2.0倍TTS听感由待确认改为主观PASS，未将该结论外推到动作贴图或EVA2。
+- 自动验证：锁文件、Ruff、mypy strict（38个源码文件）、Node语法、`git diff --check`和全量183项pytest通过。上一提交`b4a694b`的run `35400612369`为macOS成功、Windows唯一一个笑声重试测试因10 ms测试时限失败；该测试已改为跨平台安全的0.1/1秒时限，生产配置未放宽，最终CI待本轮push。
