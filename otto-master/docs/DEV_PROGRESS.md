@@ -14,7 +14,8 @@
 - Phase 4B本轮支线为 `test0.5`，从已验收的 `test0.4` 继续；跨平台探针run `35303748098`的macOS/Windows jobs均PASS。
 - Phase 4B最终支线 `test0.5` 已推送，远程哈希为 `8120d6341fc80d35f3ecf68e2320559c10a5604f`；首轮run `35304119667` Windows发生一次性Tests失败，相同正式SHA复验run `35304376265`的macOS/Windows jobs均PASS。
 - Phase 4C最终支线 `test0.6` 已推送，远程哈希为 `f359a1fc3a50360fbcb2de42cced2f48eeb6c164`；探针run `35306214077`和正式run `35306518034`的macOS/Windows jobs均PASS。
-- Phase 4D本轮支线为 `test0.7`，从已验收的 `test0.6` 继续；本地80个测试及全部质量门已通过，探针run `35309090968`的macOS/Windows jobs均PASS。
+- Phase 4D最终支线 `test0.7` 已推送，远程哈希为 `2b22a724d7169c2f84c5e028b95f40de7c0c4964`；正式run `35309478483`的macOS/Windows jobs均PASS。
+- Phase 4E真机支线为 `test0.8`，从已验收的 `test0.7` 继续；两台EVA控制、锁定改配拒绝、重复ID和Server/Broker重启恢复均已通过，正式CI待提交后运行。
 - 此后每个阶段或补充检查点使用下一个 `testN.N` 编号。
 - 支线编号与产品版本分别记录，互不驱动。
 
@@ -26,7 +27,7 @@
 | Phase 1 Runtime与Message Bus | 已完成 |
 | Phase 2 SQLite | 已完成 |
 | Phase 3 Web/OTA/mDNS/Embedded MQTT Broker | 已完成 |
-| Phase 4 MQTT控制/TCP回退/WebSocket兼容 | 进行中；Phase 4A-4D已完成fake MQTT/TCP/WebSocket上行、查询和动作/stop闭环，固件与真机待验收 |
+| Phase 4 MQTT控制/TCP回退/WebSocket兼容 | 进行中；Phase 4A-4D软件门禁完成，Phase 4E两台EVA的2.0.6 OTA、MQTT控制、锁定改配、重复ID及Server/Broker重启恢复已通过；仅本支线正式CI待验收 |
 | Phase 5 Opus/ASR/TTS | 未开始；火山Provider、协议和独立云API烟测已完成，Otto Master代码与真机链路未实现 |
 | Phase 6 WakeGate | 未开始 |
 | Phase 7 LLM/Dispatcher/动作 | 部分完成；Phase 4C已实现传输无关命令Dispatcher，LLM意图尚未开始 |
@@ -34,7 +35,7 @@
 | Phase 9 Windows打包 | 未开始 |
 | Python业务实现 | Phase 1-3基座及Phase 4A-4D多传输Session、查询、命令仓库和动作/stop闭环已实现 |
 | 自动测试 | 80通过；Ruff与mypy strict通过；Phase 4D macOS/Windows探针与PyInstaller smoke通过 |
-| 硬件验证 | 未运行 |
+| 硬件验证 | Phase 4E通过；EVA1/EVA2均为2.0.6、MQTT online、14动作可查询，动作/stop、隔离、锁定改配、重复ID及Server/Broker重启恢复通过；实体Windows仍属于Phase 9 |
 
 ## 已完成
 
@@ -85,15 +86,21 @@
 - Phase 4D已让Verifier和Dispatcher锁定所选传输；错误传输响应不能完成查询，在途动作遇到传输切换进入`disconnected`，不会跨传输重放。TCP与WebSocket fake设备分别完成动作及stop的完整持久生命周期。
 - Phase 4D本机通过`uv lock --check`、Ruff、mypy strict（34个源码文件）、80个pytest、前端JS语法和`git diff --check`；真实HTTP/WebSocket、TCP与内嵌MQTT在同一Runtime并存并释放端口。
 - Phase 4D跨平台探针run `35309090968`通过：Windows job `105487213519`、macOS job `105487213801`均success，包含锁定安装、Ruff、mypy、80个测试、PyInstaller构建和Broker可执行文件实跑。
+- Phase 4D最终SHA `2b22a724d7169c2f84c5e028b95f40de7c0c4964` 已推送且与`origin/test0.7`一致；正式run `35309478483`的Windows与macOS jobs均success。
+- EVA固件`2.0.6`已实现MQTT URL解析/重连、连接hello、5秒heartbeat、stop ACK、32项命令响应去重缓存、14动作Schema、NVS设备名和一次性锁定发放；ESP-IDF 5.5.5构建产物3,768,160字节，SHA256 `7580fe7f3d78641561d5a9968a5ed75b81697b2d5e2fe09b4ddad55220f5e551`。
+- EVA1与EVA2均经真实OTA和独立凭据接入本机内嵌Broker。两台verify分别在367.829 ms和189.897 ms返回idle与14动作；各自`swing → stop → idle`和6步`walk`完成，6步分别约7.399秒与7.455秒，另一台保持idle。
+- EVA1使用`amount=0`的swing音效路径完成累计超过60秒的内置笑声播放；以诊断心跳的`sound.busy`而非仅命令ACK确认，最终两台均online/idle、无错误。
+- EVA1在缺少`current_token`的二次发放攻击中返回`provisioning is locked`且保持原身份在线；相同`gate-e3-duplicate-20260918`动作ID实投两次仅产生完全一致的缓存ACK，未二次入队。
+- Otto Master与内嵌Broker完整停止后重新启动，两台EVA无需重启即在约3秒内重新hello；随后EVA1/EVA2 verify分别615.000 ms和91.554 ms通过，WebUI HTTP 200，集群stop后两台均online/idle。
 
 ## 进行中
 
-- Phase 4D本地门禁与跨平台探针已通过；`test0.7`唯一验收提交、push和正式SHA核对按本轮Session Contract收尾。
-- 完整Phase 4尚未完成：固件hello/heartbeat/stop/命令ID去重、Broker重启后真设备恢复和EVA1/EVA2真机MQTT结果仍未验收。
+- `test0.8`真机与本地自动门已完成；固件改动仍在`/Users/howtion/otto`工作树，Otto Master支线只剩正式macOS/Windows CI。
+- 完整Phase 4的软件与两台真机门禁已闭环；实体Windows局域网仍按Phase 9单独验收，不冒充本轮CI结果。
 
 ## 下一步
 
-完成`test0.7`远程门禁后按用户要求暂停，不自动创建下一支线或开始Phase 5。恢复施工时，应先重新核对GitHub基线，再由用户确定进入固件/EVA真机验收还是按`docs/VOLCENGINE_SPEECH_INTEGRATION.md`开展Phase 5。
+按最快MVP关键路径执行：先在EVA1上实现`完整大笑并确认播放结束 → 开启收音 → Opus/PCM → 火山ASR → DeepSeek流式回复 → 分句火山TTS → EVA顺序播放`；随后补WakeGate、MQTT加密UDP音频、第二台设备和Windows打包。笑声期间必须丢弃麦克风帧，未确认播放结束或超时必须失败关闭，不得进入STT/LLM。
 
 ## 已知风险
 
@@ -102,7 +109,7 @@
 - 当前账号的ASR 2.0资源请求返回403，Phase 5先使用已验证的ASR 1.0时长版；2.0开通前不得自动切换或把403误报为密钥整体失效。
 - DeepSeek模型名称来自当前官方配置；实现阶段仍需用新密钥完成一次真实连通测试。
 - ESP32云端唤醒需要固件在休眠时通过VAD触发音频上传，服务端完成后仍需配套固件改造。
-- 固件2.0.5的MQTT入口缺少stop、独立hello/heartbeat和命令ID去重；Phase 4必须补齐后再启用QoS 1。
+- 固件2.0.6已补齐stop、独立hello/heartbeat和有界命令ID缓存；相同ID真机重复投递仅重放原ACK，当前控制消息保持QoS 0/non-retain。
 - Windows真实局域网mDNS、防火墙提示和完整应用打包仍留给Phase 9实体Windows环境；本轮Windows CI已覆盖aMQTT认证/ACL、Runtime网络集成和Broker PyInstaller可执行文件。
-- fake设备accepted/moving/completed、stop与超时安全收尾已实现；Broker重启后设备自动恢复、固件命令ID去重、真机stop和安全动作仍属于后续Phase 4检查点。
+- fake与两台真机的accepted/moving/completed、stop、设备隔离、锁定改配拒绝、重复ID及Server/Broker重启恢复均已通过。
 - TCP和设备WebSocket当前是无TLS的局域网兼容入口，不得直接暴露到互联网或不可信网络；生产化前需要TLS终止、证书校验和对应威胁模型。

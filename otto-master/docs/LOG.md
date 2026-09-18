@@ -41,6 +41,25 @@
 
 ## 最近记录
 
+### 2026-09-18 / Phase 4E / 双EVA固件2.0.6与真实MQTT基础门禁
+
+- 版本：Otto Master保持`0.4.3`；EVA固件`2.0.5 → 2.0.6`。
+- Git迭代：`test0.8`，基线为已验收`test0.7` / `2b22a724d7169c2f84c5e028b95f40de7c0c4964`；本地与真机门禁完成，正式CI待提交后运行。
+- 目标：补齐固件MQTT hello/heartbeat/stop/命令去重与一次性本地发放，并用EVA1/EVA2证明本机Server可按MAC独立查询和控制。
+- 固件修改：MQTT endpoint解析与5秒重连、`otto-mqtt/1` hello/5秒heartbeat、stop ACK、32项命令响应缓存、14动作参数Schema、NVS名称与凭据、TCP固件版本、目标MAC校验及发放锁；OTA后优先锁定本地MQTT配置。
+- 安全：每设备client/username/up/down topic必须与MAC精确匹配；password/token/current_token递归脱敏；发放材料只在内存转发；`.env`与`.local-secrets/`保持Git忽略且未输出真实值。
+- 构建：ESP-IDF 5.5.5成功；`xiaozhi.bin` 3,768,160字节，SHA256 `7580fe7f3d78641561d5a9968a5ed75b81697b2d5e2fe09b4ddad55220f5e551`。
+- 本机自动门：针对MQTT/Server的22个测试和全量80个pytest通过；`uv lock --check`、Ruff、mypy 34源码、前端JS语法、diff检查通过。
+- EVA1实测：`2.0.6`、MQTT online；verify 367.829 ms返回idle与14动作；swing进入moving后stop完成，2步及6步walk完成，6步约7.399秒。
+- EVA2实测：OTA下载HTTP 200，稍晚于首个50秒轮询窗口在13:57:15以`2.0.6` hello；发放时将默认名修正为NVS `EVA2`。MQTT verify 189.897 ms返回idle与14动作；swing/stop及6步walk完成，6步约7.455秒。
+- 隔离与收尾：任一设备动作时另一台保持idle；最终两台均`online / mqtt / 2.0.6 / idle`且`last_error=null`。
+- 音效返工：首次错误地把不支持MCP的诊断TCP当作纯笑声入口，未计为通过；随后用Server的`swing amount=0`触发14.792秒内置音效，以心跳`sound.busy`确认累计超过60秒。一次ACK丢失正确触发Server安全stop，音频仍自然结束。
+- 安全与去重：EVA1在无`current_token`的攻击性二次发放中返回`provisioning is locked`并保持原配置；相同`gate-e3-duplicate-20260918`动作包实投两次，设备返回两份完全一致的缓存ACK，未二次排队，随后安全stop。
+- 恢复：Otto Master与内嵌Broker完整停止再启动，两台EVA无需重启即重新hello；EVA1/EVA2 verify分别615.000 ms和91.554 ms通过，WebUI HTTP 200，最终集群stop后均online/idle。
+- 本地复验：`uv lock --check`、Ruff、mypy strict（34源码）、80个pytest、前端JS语法和diff检查全部通过。
+- 未运行：`test0.8`正式CI与实体Windows；实体Windows属于Phase 9，不用本轮CI代替。
+- 下一步：按用户指定顺序，在EVA1实现`完整大笑结束 → 开启收音 → 火山STT → DeepSeek流式回复 → 分句火山TTS → 顺序播放`；笑声期间禁用/丢弃收音，超时失败关闭。随后补WakeGate、MQTT UDP音频、第二台语音与Windows。
+
 ### 2026-09-18 / Phase 4D / TCP回退与Xiaozhi WebSocket兼容传输
 
 - 版本：`0.4.3`

@@ -13,7 +13,7 @@
 
 Phase 5语音链继续遵守这条边界：MQTT只承载TTS/listen等JSON信令，连续Opus仍走加密UDP；内部Message Bus只发布音频元数据和短期 `frame_ref`。三传输共同的身份、选择和命令路由见 `docs/DEVICE_TRANSPORT_CONTRACT.md`；火山ASR/TTS、PCM/Opus转换和完整数据流见 `docs/VOLCENGINE_SPEECH_INTEGRATION.md`。
 
-## 2. 固件2.0.5已知能力与缺口
+## 2. 固件2.0.5历史能力与2.0.6现状
 
 ### 已有能力
 
@@ -31,7 +31,15 @@ Phase 5语音链继续遵守这条边界：MQTT只承载TTS/listen等JSON信令�
 - 增加命令ID去重缓存。在启用QoS 1或应用层重试后，同一ID不得重复执行动作。
 - 动作立即ACK只代表“已接收”，不代表动作完成；完成状态必须通过状态事件或查询确认。
 
-在这些缺口补齐前，TCP继续承担 `stop` 和可靠在线心跳，MQTT测试只标记为部分通过。
+上述为`2.0.5`历史缺口。`2.0.6`已补齐：
+
+- 连接成功后发送`otto-mqtt/1` hello，在线期间每5秒heartbeat，断线后每5秒重连并在重连后重新hello。
+- MQTT处理`stop` / `otto_stop`并返回相同ID的`otto_stop_ack`。
+- action与stop共享32项有界命令响应缓存；重复ID重放原ACK，不重新排队。
+- hello上报NVS名称、固件、动态IP、运行态与`actions/state/stop/command_dedup`能力。
+- 一次性TCP发放把endpoint、client ID、username、password与精确up/down topic写入NVS并锁定；再次发放必须证明当前token。
+
+2026-09-18两台真机均已通过hello/heartbeat、状态与14动作查询、action/stop、双向隔离、相同ID重复投递、Server/Broker重启恢复和攻击性改配拒绝。控制消息继续保持QoS 0/non-retain；QoS 1仅保留为后续网络策略，不作为当前实现事实。
 
 ## 3. 启动与发现流程
 
@@ -239,7 +247,7 @@ Config / Logging / MessageBus / Storage
 - SQLite记录`requested → published → accepted → moving → completed`及rejected/timeout/disconnected/failed终态；重启不重放未完成动作。
 - stop中断当前动作、取消尚未执行的同设备动作并优先下发；集群stop拆为每设备独立命令与结果。
 - ACK或完成超时不重发动作，而是标记timeout并排入安全stop；传输断开标记disconnected。
-- 当前证据来自真实内嵌Broker与两个fake客户端；固件2.0.5的MQTT stop、hello/heartbeat和去重缺口未补齐，不声称EVA真机通过。
+- Phase 4C原始证据来自真实内嵌Broker与两个fake客户端；Phase 4E随后在固件2.0.6的EVA1/EVA2上通过stop、hello/heartbeat、14动作、隔离、相同ID重复投递与Server/Broker重启恢复。
 
 ## 10. EVA1/EVA2真机验收
 
@@ -248,7 +256,7 @@ Config / Logging / MessageBus / Storage
 ```text
 Wi-Fi: EVA1、EVA2和开发机位于同一局域网
 Master: master.local
-Firmware: 2.0.5
+Firmware: EVA1/EVA2当前均为2.0.6；2.0.5仅保留为迁移基线
 EVA1当前IP: 192.168.172.127（仅诊断）
 EVA2当前IP: 192.168.172.117（仅诊断）
 动作目录: 14个动作
@@ -267,3 +275,14 @@ EVA2当前IP: 192.168.172.117（仅诊断）
 9. 测试结束在 `finally` 阶段向两台设备发送 `stop` 并确认 `idle`。
 
 真机用例标记为 `hardware` 和 `mqtt`，不进入默认单元测试；每次阶段验收必须记录设备名称、MAC、固件版本、实际传输、命令ID和结果。
+
+### 2026-09-18 Phase 4E实测快照
+
+- EVA1 `e072a1f71184`与EVA2 `aca704ed89a8`同时以MQTT在线，各自5秒heartbeat且各返回14动作。
+- EVA1 verify耗时367.829 ms；EVA2 verify耗时189.897 ms；两者状态与动作目录响应均按原ID关联。
+- 两台分别完成`swing → moving → stop → idle`以及6步`walk → completed → idle`；6步耗时约7.399秒和7.455秒。
+- 任一设备动作期间另一台保持online/idle；最终两台均无待执行动作且`last_error=null`。
+- EVA1收到两份ID均为`gate-e3-duplicate-20260918`的一步walk后返回两份字段完全一致的ACK，第二份来自32项缓存，未再次排队；随后stop并回到idle。
+- 缺少`current_token`的二次发放在EVA1真机返回`provisioning is locked`，原MQTT身份、名称和连接保持不变。
+- Otto Master与Broker完整重启后，两台无需重启即重新hello；EVA1/EVA2 verify分别615.000 ms和91.554 ms通过，WebUI HTTP 200，最终集群stop后均online/idle。
+- 尚未通过：实体Windows局域网；它属于Phase 9，不由macOS真机或Windows CI替代。

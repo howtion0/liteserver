@@ -19,6 +19,31 @@ MVP      version 1.0.0  branch test1.0  EVA1/EVA2完整链路通过
 
 Phase 0和Phase 1已在强制门禁建立前完成但没有GitHub检查点，因此不得伪造两段历史；`test0.1` 是一次性恢复基线。支线编号是连续施工检查点，不是产品版本。若中途增加修复检查点，使用下一个自然编号，后续阶段顺延，不复用旧编号，也不特别处理 `test0.9` 到 `test1.0` 的变化。
 
+## 2026-09-18最快MVP关键路径
+
+原Phase编号继续作为能力地图，但实际施工按可运行纵向切片排序，不为凑齐横向模块而延迟真机闭环：
+
+```text
+M0  关闭Phase 4剩余高风险门禁
+    Broker重启恢复 + 真机重复命令ID + 两台最终idle
+
+M1  单台EVA语音闭环（最快可听见结果）
+    EVA1 WebSocket二进制Opus → PCM → 火山ASR
+    固定回复文本 → 火山TTS PCM → 60 ms Opus → EVA1播放
+
+M2  最小智能闭环
+    WakeGate（你好EVA1）→ DeepSeek结构化意图
+    先只开放白名单问答与一个低风险动作，失败时不动作
+
+M3  双机与目标数据面
+    MQTT加密UDP音频 → EVA2 → device/utterance隔离 → 双机并发
+
+M4  可交付门禁
+    故障注入、日志/密钥扫描、WebUI、macOS/Windows、PyInstaller
+```
+
+执行约束：EVA2在M1期间保持已验证MQTT控制基线；EVA1切换WebSocket语音Profile不得擦除Wi-Fi或每设备身份。每个里程碑必须先通过fake/provider测试，再做单台真机，最后才扩到双机。ASR/TTS先用已经实测通过的火山协议，LLM只用DeepSeek结构化输出；不在M1引入唤醒、对话记忆、动作规划或MQTT UDP，以缩短首个端到端闭环。
+
 ## 全Phase强制施工门禁
 
 每个Phase以及Phase内的补充检查点，都必须完整执行 `CODEX_CONSTRUCTION_WORKFLOW.md`：
@@ -163,24 +188,26 @@ Phase 4A检查点（`test0.4`）只完成不移动设备的上行联调端：
 - [x] Phase 4B精确down状态/动作目录查询、correlation、超时与只读验证报告
 - [x] Phase 4C fake设备MQTT动作、stop、持久命令历史与完整生命周期
 - [x] Phase 4D认证TCP回退、Xiaozhi WebSocket v1、fake多传输隔离与动作/stop闭环
-- [ ] 固件MQTT改造、Broker恢复与EVA1/EVA2真机验收
+- [x] 固件2.0.6 MQTT hello/heartbeat/stop/有界命令缓存与锁定本地发放
+- [x] EVA1/EVA2真实OTA、独立MQTT身份、14动作、action/stop与基础隔离
+- [x] 锁定改配拒绝、相同命令ID真机重复投递、Server/Broker重启与双机恢复
 
 验收：
 
-- [ ] EVA1和EVA2通过MQTT同时连接，当前IP变化不影响身份
-- [ ] 两台设备均返回完整14动作目录
-- [ ] EVA1执行 `swing → stop → idle` 时EVA2状态不变
-- [ ] EVA2执行 `swing → stop → idle` 时EVA1状态不变
-- [ ] 相同命令ID重复投递不会执行两次
-- [ ] MQTT动作和stop消息均不retain
-- [ ] 重连不产生重复在线记录
-- [ ] 一台设备断开不影响另一台
-- [ ] Broker重启后设备可重连；失败时WebUI不伪报在线
-- [ ] TCP回退启用时WebUI明确显示 `transport=tcp`
-- [ ] 只读连接验证不移动机器人，并逐项验证心跳、状态查询和动作目录
-- [ ] 安全动作验证必须完成 `accepted → moving → idle`，超时路径自动stop并确认idle
-- [ ] 页面只显示publish或ACK时不得标记动作完成
-- [ ] WebUI刷新后能恢复正在执行命令及最终结果
+- [x] EVA1和EVA2通过MQTT同时连接，当前IP变化不影响身份
+- [x] 两台设备均返回完整14动作目录
+- [x] EVA1执行 `swing → stop → idle` 时EVA2状态不变
+- [x] EVA2执行 `swing → stop → idle` 时EVA1状态不变
+- [x] 相同命令ID重复投递不会执行两次
+- [x] MQTT动作和stop消息均不retain
+- [x] 重连不产生重复在线记录
+- [x] 一台设备OTA/重启时不影响另一台在线与idle状态
+- [x] Server/Broker重启后设备自动重连、重新hello并恢复WebUI查询
+- [x] TCP诊断回退可按稳定MAC同时只读观测两台设备，主控制面仍明确显示实际`transport=mqtt`
+- [x] 只读连接验证不移动机器人，并逐项验证心跳、状态查询和动作目录
+- [x] 安全动作验证必须完成 `accepted → moving → idle`，超时路径自动stop并确认idle
+- [x] 命令生命周期不把publish或ACK标记为动作完成
+- [x] WebUI重启后从SQLite与新设备状态恢复设备、动作目录和最终idle结果
 
 ## Phase 5：Opus与云端ASR/TTS
 

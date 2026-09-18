@@ -1,6 +1,6 @@
 # Module Status
 
-当前已完成Phase 1、Phase 2、Phase 3、Phase 4A-4D实现；Phase 4D本地80个测试、macOS/Windows探针与PyInstaller smoke通过。“文件存在”不代表固件、真机或后续云业务已经实现。
+当前已完成Phase 1、Phase 2、Phase 3、Phase 4A-4D实现；Phase 4E已在EVA1/EVA2上完成固件2.0.6与基础MQTT控制真机门禁。Phase 4D本地80个测试、macOS/Windows正式矩阵与PyInstaller smoke通过。“文件存在”或单段真机成功不代表恢复门禁、语音云链或Windows实体部署已经完成。
 
 | 模块 | 文件 | 状态 |
 |---|---|---|
@@ -50,3 +50,15 @@
 | mDNS tests | `tests/test_mdns.py` | Phase 3已实现 |
 | WakeGate tests | `tests/test_wake_gate.py` | Phase 6待实现 |
 | Dispatcher tests | `tests/test_dispatcher.py` | Phase 4C+4D已实现队列/stop/超时、transport锁定、切换断线与集群拆分 |
+
+## Phase 4E真机与固件状态
+
+| 项目 | 状态 |
+|---|---|
+| EVA固件 | `2.0.6`已构建；MQTT URL/重连、hello、5秒heartbeat、stop ACK、32项命令响应缓存、14动作Schema和锁定本地发放已实现 |
+| EVA1 | `e072a1f71184`，MQTT online，14动作，swing/stop、2步与6步walk通过，最终idle |
+| EVA2 | `aca704ed89a8`，MQTT online，NVS名称EVA2，14动作，swing/stop与6步walk通过，最终idle |
+| 双机隔离 | EVA1与EVA2分别动作时另一台保持idle；身份、凭据与精确topic按MAC隔离 |
+| 本地音效 | EVA1内置14.792秒笑声经`amount=0`动作触发并以`sound.busy`观测，累计播放超过60秒 |
+| 安全与恢复 | 无`current_token`改配被拒绝；相同命令ID仅重放缓存ACK；Server/Broker重启后双机重新hello、verify与WebUI恢复 |
+| 未完成 | `test0.8`正式macOS/Windows CI；实体Windows局域网属于Phase 9 |
