@@ -292,4 +292,4 @@
 - EVA1真机：一轮连续两次空final后只发生一次恢复笑声，随后回waiting且无第三次笑声/failed；另一轮完成五次有效问答，均由`partial_stability`收句，端点约3.309至8.304秒、final约0.078至0.196秒，五次TTS全部完成。“奶酪前进”正确进入`self_otto_walk_forward`并由Dispatcher完成动作，按钮`device_goodbye`退出正常。
 - 静默门禁：独立会话中设备继续产生9次VAD-only事件，WakeGate仍在开放监听后约8秒以`idle_timeout`退出；最终EVA1 waiting/idle，活动ASR与UDP session均为0。EVA2虽重新在线但本轮未向其下发语音或动作命令。
 - 用户验收：在上述修复后的EVA1链路上，用户确认“对话感觉没问题了”；当前对话流畅度、设备音量100与服务端2.0倍TTS听感由待确认改为主观PASS，未将该结论外推到动作贴图或EVA2。
-- 自动验证：锁文件、Ruff、mypy strict（38个源码文件）、Node语法、`git diff --check`和全量183项pytest通过。上一提交`b4a694b`的run `35400612369`为macOS成功、Windows唯一一个笑声重试测试因10 ms测试时限失败；该测试已改为跨平台安全的0.1/1秒时限，生产配置未放宽，最终CI待本轮push。
+- 自动验证：锁文件、Ruff、mypy strict（38个源码文件）、Node语法、`git diff --check`和全量183项pytest通过。`b4a694b`的run `35400612369`在Windows暴露10 ms笑声重试测试时限；`1c10865`的run `35403162431`为macOS成功，Windows继续暴露新空识别测试于waiting后抢跑检查异步close记录。两处都只加固测试等待：前者改为0.1/1秒，后者显式等待会话关闭事实；生产配置和状态机未放宽。本地30轮Windows敏感WakeGate重复测试通过，最终CI待后续push。

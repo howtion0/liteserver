@@ -194,7 +194,7 @@ Otto Master仓库：
 | A6 | 固件恰有21个表情与22个动作贴图；中央图替换且状态栏/底部文字路径保持 | 静态断言、ESP-IDF完整构建和EVA1真机观察 | 是 | IN PROGRESS | 43个描述符纳入构建，2.0.15完整构建和OTA通过；动作图切换/恢复仍待用户目视确认 |
 | A7 | EVA1升级2.0.15后动作图随实际动作切换并恢复，心跳显示音量100，动作最终idle | OTA回连、heartbeat、低风险动作、stop/idle及用户目视确认 | 是 | IN PROGRESS | EVA1回连报告2.0.15与音量100，多种真实动作completed且最终idle；只缺目视确认 |
 | A8 | 真实火山TTS经2.0倍增益与设备音量100播放，EVA1可清楚听见且无明显削波/卡顿 | 真实短句TTS播放、遥测清理及用户听感确认 | 是 | PASS | 服务状态确认增益2.0、设备心跳确认100，五轮TTS全部完成；用户确认“对话感觉没问题了” |
-| A9 | 自动门禁与跨平台CI通过 | `uv lock --check`; Ruff; mypy; 全量pytest; `git diff --check`; GitHub macOS/Windows jobs | 是 | IN PROGRESS | 本地锁文件、Ruff、mypy（38个源码文件）、183项pytest、Node语法和diff check通过；run 35400612369的macOS成功、Windows因测试专用10 ms时限失败，已放宽为跨平台安全时限，最终CI待本轮push |
+| A9 | 自动门禁与跨平台CI通过 | `uv lock --check`; Ruff; mypy; 全量pytest; `git diff --check`; GitHub macOS/Windows jobs | 是 | IN PROGRESS | 本地锁文件、Ruff、mypy（38个源码文件）、183项pytest、Node语法和diff check通过；run 35400612369暴露10 ms测试时限，run 35403162431又暴露waiting后异步close断言抢跑，两处测试同步均已加固，最终CI待后续push |
 | A10 | EVA1+EVA2真实同时在线、并发对话/控制不串线 | 两台设备在线后真机双设备测试 | 否 | NOT RUN | EVA2已重新在线但本次对话修复未向其下发任何动作或语音命令；不能用在线状态或fake冒充双机真机通过 |
 | A11 | 结束时EVA1 idle、活动语音/UDP session为0，无遗留测试进程 | 只读健康、设备与会话状态检查 | 是 | PASS | EVA1 online/idle、sound_busy=false；WakeGate sessions与UDP sessions均为0，Dispatcher active/queued均为0 |
 
@@ -260,6 +260,7 @@ push test1.0 → verify remote hash → GitHub macOS/Windows success
 | 12 | 对话再次卡顿 | FAIL | shared endpoint timer被VAD true/false反复取消和覆盖，已收到的partial稳定端点也会丢失；极端轮最终触发火山30秒超时并遗留活动utterance | partial、VAD静音和12秒硬上限改为独立任务；关闭先原子摘除活动utterance，迟到帧分类统计 | 自动回归证明持续VAD抖动不能取消partial/硬上限；EVA1五轮均以partial稳定正常收句，ASR无失败 |
 | 13 | 空识别与静默循环 | FAIL | 单次空final恢复后若仍为空会继续笑；设备VAD受噪声/扬声器尾音抖动，可不断取消8秒退出 | 同一session只允许一次空识别笑声重试，第二次正常退出；WakeGate只接受非空ASR partial作为讲话证据 | 真机两次空final后无第三次笑声并回waiting；另一次收到9次VAD-only仍在约8秒`idle_timeout`退出，ASR/UDP为0 |
 | 14 | 首次test1.0 CI | FAIL | run `35400612369` macOS全绿，Windows唯一失败为笑声状态查询重试测试使用10 ms响应时限，慢runner连续错过测试响应 | 测试仍保留“首个查询丢失后重试”语义，单查询/总时限改为0.1/1秒，不放宽生产配置 | 本地183项通过；修复提交后的macOS/Windows run待push后确认 |
+| 15 | 对话修复CI | FAIL | run `35403162431` macOS成功；Windows唯一失败为新空识别测试先观察到`waiting`，异步清理协程晚几毫秒才把`close_audio_session`写入fake记录；生产运行无失败 | 新增有界清理等待helper，所有“waiting/failed后检查关闭”用例同时等待session close事实，不改变生产状态机或超时 | 本地183项和30轮Windows敏感WakeGate重复测试通过；待push后最终CI |
 
 ## 实际结果
 
@@ -284,8 +285,8 @@ push test1.0 → verify remote hash → GitHub macOS/Windows success
 
 - 测试支线：`test1.0`
 - 已有检查点：`b4a694b1c5b6bf39bdb4cb4288b42cfc27268876`，已推送；对应run `35400612369`为macOS成功、Windows测试时限失败
-- 本轮对话加固提交：待生成
-- 本轮push结果：待执行
-- 本地HEAD与远程一致：当前代码尚未提交
+- 对话加固提交：`1c10865b96bf87c70732d5e7000db09357d3b6dc`，已推送；run `35403162431`的Windows暴露测试异步清理断言抢跑
+- CI断言加固提交：待生成
+- 本地HEAD与远程一致：否，当前有待提交的测试同步修复
 - 本轮是否获单独授权合并main：否
 - 本轮是否获单独授权tag或正式发布：否

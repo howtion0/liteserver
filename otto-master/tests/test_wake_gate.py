@@ -424,6 +424,20 @@ async def _wait_state(service: WakeGateService, expected: ConversationState) -> 
     raise AssertionError(f"wake gate did not reach {expected.value}: {service.status()}")
 
 
+async def _wait_closed_sessions(
+    playback_sink: FakePlaybackSink,
+    expected: list[tuple[str, str]],
+) -> None:
+    deadline = asyncio.get_running_loop().time() + 2
+    while asyncio.get_running_loop().time() < deadline:
+        if playback_sink.closed_sessions == expected:
+            return
+        await asyncio.sleep(0.005)
+    raise AssertionError(
+        f"audio sessions were not closed: {playback_sink.closed_sessions}"
+    )
+
+
 async def _wait_action_count(dispatcher: FakeDispatcher, expected: int) -> None:
     deadline = asyncio.get_running_loop().time() + 2
     while asyncio.get_running_loop().time() < deadline:
@@ -1150,10 +1164,10 @@ async def test_second_consecutive_empty_final_exits_without_laughter_loop() -> N
         await _wait_state(service, ConversationState.RECOGNIZING)
         await bus.publish(_transcription("question-2", "   "))
         await _wait_state(service, ConversationState.WAITING)
+        await _wait_closed_sessions(playback_sink, [(DEVICE_ID, SESSION_ID)])
 
         status = service.status()
         assert len(dispatcher.actions) == 2
-        assert playback_sink.closed_sessions == [(DEVICE_ID, SESSION_ID)]
         assert status["empty_transcription_retries"] == 1
         assert status["empty_transcription_exits"] == 1
         assert status["devices"][DEVICE_ID]["empty_transcription_streak"] == 2
@@ -1191,8 +1205,8 @@ async def test_eight_second_equivalent_idle_timeout_closes_the_chat_session() ->
         await bus.publish(_audio_started("trigger-1"))
         await _wait_state(service, ConversationState.LISTENING)
         await _wait_state(service, ConversationState.WAITING)
+        await _wait_closed_sessions(playback_sink, [(DEVICE_ID, SESSION_ID)])
 
-        assert playback_sink.closed_sessions == [(DEVICE_ID, SESSION_ID)]
         assert service.status()["devices"][DEVICE_ID]["exit_reason"] == "idle_timeout"
     finally:
         await service.shutdown()
@@ -1228,11 +1242,11 @@ async def test_vad_only_activity_does_not_defeat_the_idle_timeout() -> None:
         await _wait_state(service, ConversationState.RECOGNIZING)
         await bus.publish(_activity("question-1"))
         await _wait_state(service, ConversationState.WAITING)
+        await _wait_closed_sessions(playback_sink, [(DEVICE_ID, SESSION_ID)])
 
         status = service.status()["devices"][DEVICE_ID]
         assert status["state"] == "waiting"
         assert status["speech_detected"] is False
-        assert playback_sink.closed_sessions == [(DEVICE_ID, SESSION_ID)]
         assert service.status()["vad_only_activity_ignored_for_idle"] == 1
     finally:
         await service.shutdown()
@@ -1312,11 +1326,11 @@ async def test_transcription_display_failure_closes_session_without_calling_llm(
         await _wait_state(service, ConversationState.RECOGNIZING)
         await bus.publish(_transcription("question-1", "你是谁？"))
         await _wait_state(service, ConversationState.FAILED)
+        await _wait_closed_sessions(playback_sink, [(DEVICE_ID, SESSION_ID)])
 
         assert llm.prompts == []
         assert tts.played == []
         assert dispatcher.stops == 1
-        assert playback_sink.closed_sessions == [(DEVICE_ID, SESSION_ID)]
         assert service.status()["devices"][DEVICE_ID]["failure_code"] == (
             "websocket_control_write_failed"
         )
@@ -1365,10 +1379,10 @@ async def test_answer_timeout_cancels_pipeline_and_closes_session() -> None:
         await _wait_state(service, ConversationState.RECOGNIZING)
         await bus.publish(_transcription("question-1", "你是谁？"))
         await _wait_state(service, ConversationState.FAILED)
+        await _wait_closed_sessions(playback_sink, [(DEVICE_ID, SESSION_ID)])
 
         assert playback_sink.transcriptions == [(DEVICE_ID, SESSION_ID, "你是谁？")]
         assert dispatcher.stops == 1
-        assert playback_sink.closed_sessions == [(DEVICE_ID, SESSION_ID)]
         assert service.status()["devices"][DEVICE_ID]["failure_code"] == (
             "conversation_timeout"
         )
