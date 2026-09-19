@@ -18,7 +18,7 @@
 - Phase 4E真机支线为 `test0.8`，从已验收的 `test0.7` 继续；两台EVA控制、锁定改配拒绝、重复ID和Server/Broker重启恢复均已通过，后续已被`test0.9/test1.0`的正式CI覆盖。
 - Phase 5纵向MVP支线`test0.9`已推送，远程哈希为`a2c22fb144beece1676625c39deee2b7d223d9df`；GitHub Actions run `35384613680`的macOS/Windows jobs均PASS。
 - 当前工作支线为`test1.0`，从上述已验收基线继续，包含多设备WebUI、对话/工具加固、TTS音量和看山表情。首个提交`b4a694b1c5b6bf39bdb4cb4288b42cfc27268876`的run `35400612369`暴露Windows测试时限；对话修复提交`1c10865b96bf87c70732d5e7000db09357d3b6dc`的run `35403162431`又暴露测试异步close断言抢跑。两处测试同步修复收口于`51a1b48142b3193d9e0a10545d19f0b61c1a21f6`，最终run `35403562279`的macOS/Windows Tests、原生Opus加载与打包smoke全部PASS。
-- 同一支线继续处理同名Wi-Fi换网故障：Server从`192.168.172.225`切到`192.168.122.225`后，旧mDNS实现仍广播启动时地址；固件本地8765链虽显式查询mDNS，正式MQTT此前却仍把`.local`交给底层DNS。Server现已加入5秒IPv4监视、原位更新、瞬时回环保护和失败重试；EVA固件2.0.16让正式MQTT首次连接/每次重连复用显式解析。本地门禁、EVA1换网回连、EVA2/EVA3升级和三机同批动作均通过，当前只待Server提交与新CI收口。
+- 同一支线继续处理同名Wi-Fi换网故障：Server从`192.168.172.225`切到`192.168.122.225`后，旧mDNS实现仍广播启动时地址；固件本地8765链虽显式查询mDNS，正式MQTT此前却仍把`.local`交给底层DNS。Server现已加入5秒IPv4监视、原位更新、瞬时回环保护和失败重试；EVA固件2.0.16让正式MQTT首次连接/每次重连复用显式解析。本地门禁、EVA1换网回连、EVA2/EVA3升级、三机同批动作和run `35408550039`跨平台CI均通过。
 - 配套EVA固件2.0.15源码已推送到`howtion0/otto`的`codex/otto-portable`，远端SHA为`c6addc6a35bf54c6c28f07fde53828cd73bce1f0`；2.0.11恢复点仍为`abb769f1d0f3d1c03fb7a6106bd7288f31c66a98`。
 - EVA固件2.0.16已完整构建、OTA到EVA1并推送`howtion0/otto`的`codex/otto-portable@c4ad28e45adb5f565469d4c14b52aedcb74c1ffb`；随后EVA2和EVA3分别以保底名称完整串口烧录并核对屏显/稳定MAC。EVA2/EVA3应用SHA256分别为`b8d4e7323b5a0d4d3486373bb9c2a0a0fd345a1d4bf9bc88565595d387b1cc1a`和`50f159e5646f47045027b94878527a728e2fab03b0333761710a0a46472652a8`；源码仍是同一远端SHA，2.0.15的`c6addc6`继续作为回滚点。
 - 此后每个阶段或补充检查点使用下一个 `testN.N` 编号。
@@ -32,14 +32,14 @@
 | Phase 1 Runtime与Message Bus | 已完成 |
 | Phase 2 SQLite | 已完成 |
 | Phase 3 Web/OTA/mDNS/Embedded MQTT Broker | 已完成；`test1.0`补充换网自动刷新加固，本地门禁通过 |
-| Phase 4 MQTT控制/TCP回退/WebSocket兼容 | 进行中；Phase 4A-4D软件门禁、Phase 4E双机基线和`test1.0`三台2.0.16正式MQTT批量控制均通过；上一`test1.0`检查点跨平台CI通过，本轮mDNS提交CI待核验，WebSocket真机Profile仍待验收 |
+| Phase 4 MQTT控制/TCP回退/WebSocket兼容 | 进行中；Phase 4A-4D软件门禁、Phase 4E双机基线和`test1.0`三台2.0.16正式MQTT批量控制均通过；mDNS提交run `35408550039`跨平台CI通过，WebSocket真机Profile仍待验收 |
 | Phase 5 Opus/ASR/TTS | 进行中；火山ASR/TTS、Opus、MQTT加密UDP、独立partial/VAD/12秒硬上限三端点、2.0倍饱和增益和EVA1真实闭环已实现，EVA2单会话烟测成功；多设备并发语音、WebSocket真机与Windows实体矩阵未完成 |
 | Phase 6 WakeGate | 进行中；每轮2秒笑声门禁、循环问答、首次空final笑声恢复/连续第二次退出、仅非空partial取消的8秒静默、按钮/正式Web控制进出、瞬时状态查询重试和失败自恢复已实现 |
 | Phase 7 LLM/Dispatcher/动作 | 部分完成；DeepSeek流式`tools/tool_calls`、当前语音设备Schema、参数校验、TTS后串行工具和Dispatcher桥已实现；动作完成会等待本地音效排空，持久设备组与双机语音工具隔离未完成 |
 | Phase 8 集群/日志/容错 | 部分完成；WebUI多选、快捷/高级批量动作、stop、正式对话start/stop、逐设备结果和脱敏对话投影已实现，长期运行与完整集群策略未完成 |
 | Phase 9 Windows打包 | 未开始 |
 | Python业务实现 | Phase 1-4基座及Cloud/ASR/LLM/TTS、RobotToolBridge、DeviceAudioRouter、MQTT UDP、循环WakeGate和多设备Web控制台纵向链已实现 |
-| 自动测试 | 187通过；Ruff、mypy strict（38个源码文件）、Node语法、锁文件和diff检查通过；上一代码检查点run `35403562279`的macOS/Windows及打包smoke全部PASS，本轮mDNS CI待push |
+| 自动测试 | 187通过；Ruff、mypy strict（38个源码文件）、Node语法、锁文件和diff检查通过；mDNS实现提交`caf7f7f`的run `35408550039`在macOS/Windows完成Tests、原生Opus加载及PyInstaller broker smoke，全部PASS |
 | 硬件验证 | EVA1/EVA2/EVA3均运行2.0.16并分别以`.127/.117/.59`通过`master.local`正式MQTT在线；三机batch请求3、接受3、失败0，分别在5.222/6.229/6.221秒完成并回idle。EVA2另完成单会话MQTT+UDP问答烟测；实体Windows与多设备并发语音仍待门禁 |
 
 ## 已完成
@@ -120,13 +120,13 @@
 ## 进行中
 
 - `test1.0`代码、自动门禁、EVA1 2.0.15对话能力、正式WebUI控制、客观音量遥测、修复后真机问答及用户对话/TTS听感确认已完成；仍需由用户确认动作贴图切换/恢复。
-- Server mDNS换网自动刷新与固件2.0.16正式MQTT显式解析均已实现；三台设备在新网段以稳定MAC和动态IP在线，单机、双机和三机正式动作均completed/idle。当前只待Server提交、push与跨平台CI收口。
+- Server mDNS换网自动刷新与固件2.0.16正式MQTT显式解析均已实现；三台设备在新网段以稳定MAC和动态IP在线，单机、双机和三机正式动作均completed/idle；Server提交、push与跨平台CI已经收口。
 - 完整Phase 5仍欠多设备并发语音/工具隔离、WebSocket真机Profile、Windows/PyInstaller Opus门禁。EVA2单会话成功不能冒充双机或三机并发语音通过。
 - 多设备WebUI已经具备显式目标和并发控制；持久设备组、普通广播策略和多设备同时语音真机仍是后续范围。
 
 ## 下一步
 
-提交并推送Server mDNS修复与文档，确认macOS/Windows CI后暂停；下一轮再由用户确认看山动作图，并补多设备并发语音/工具隔离、WebSocket真机Profile与实体Windows。
+本轮在文档回填并确认远端CI后暂停；下一轮再由用户确认看山动作图，并补多设备并发语音/工具隔离、WebSocket真机Profile与实体Windows。
 
 ## 已知风险
 

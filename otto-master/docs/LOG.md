@@ -307,4 +307,5 @@
 - 阵列门禁：EVA1/EVA2 batch `array-eva1-eva2-20260919-01`请求2、接受2、失败0。三机batch `array-eva1-eva2-eva3-20260919-01`请求3、接受3、失败0；命令`c0ea38d2-18ca-4935-95c7-fd96b75e3875`、`aa933b9f-1565-421a-ac94-e1d84d89777d`、`1856da68-5a84-428a-b71d-50d4b252108c`分别在5.222、6.229、6.221秒completed，最终三台online/idle，Gateway无拒绝/发布失败。
 - 固件Git：2.0.16源码已推送`howtion0/otto codex/otto-portable@c4ad28e45adb5f565469d4c14b52aedcb74c1ffb`，本地与远端SHA一致。
 - 自动验证：全量187项pytest、Ruff、mypy strict（38个源码文件）、Node语法、锁文件和差异检查通过；Server测试覆盖地址变化、回环保护及失败后恢复，固件完整构建通过。当前Runtime广播`192.168.122.225`且监视健康。
-- 待完成：精确提交并push Server mDNS修复与文档，核验macOS/Windows CI；多设备并发语音/工具、WebSocket真机和实体Windows留到下一轮。
+- 交付：实现与实测记录已提交并push为`caf7f7f7f8b254e4697fd165b65bb76036df908d`；GitHub Actions run `35408550039`的Windows/macOS Tests、原生Opus和PyInstaller broker smoke全部PASS。
+- 待完成：多设备并发语音/工具、WebSocket真机和实体Windows留到下一轮；本轮回填文档后暂停。

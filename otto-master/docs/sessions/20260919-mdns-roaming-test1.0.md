@@ -62,7 +62,7 @@
 | M10 | EVA1/EVA2经正式批量API同时前进且独立完成 | PASS | batch `array-eva1-eva2-20260919-01`，requested=2、accepted=2、failed=0；命令`83d9d2d0-3bc9-4553-b6ea-a0016c34c3ae`和`3c2cafcb-d4cb-4ad9-9a38-cfbc27172f01`分别在5,154.350 / 5,216.091 ms完成 |
 | M11 | EVA3以正确名称、MAC和独立凭据接入 | PASS | 屏幕`EVA3/2.0.16`，hello为`288485478f34 / 192.168.122.59`，verify 171.521 ms且15个动作 |
 | M12 | EVA1/EVA2/EVA3同批动作不串设备 | PASS | batch `array-eva1-eva2-eva3-20260919-01`请求3、接受3、失败0；三条命令均完整经过requested→published→accepted→moving→completed，最终三台online/idle |
-| M13 | 本轮提交push后macOS/Windows CI | PENDING | 等待提交 |
+| M13 | 本轮提交push后macOS/Windows CI | PASS | implementation commit `caf7f7f7f8b254e4697fd165b65bb76036df908d`；run `35408550039`的Windows job `105803279402`与macOS job `105803279492`均success，包含Tests、原生Opus与PyInstaller broker smoke |
 
 ## 回滚与风险
 
@@ -76,6 +76,7 @@
 ## 提交状态
 
 - 分支：`test1.0`
-- 本轮commit：待验收后回填
-- 远端SHA与CI：待push后回填
+- 实现与实测记录commit：`caf7f7f7f8b254e4697fd165b65bb76036df908d`
+- 远端核对：`origin/test1.0`在CI启动时与上述SHA一致
+- 正式CI：GitHub Actions run `35408550039`，Windows与macOS jobs均PASS
 - 配套固件：`howtion0/otto codex/otto-portable@c4ad28e45adb5f565469d4c14b52aedcb74c1ffb`，已推送并核对远端SHA

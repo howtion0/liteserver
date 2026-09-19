@@ -266,7 +266,7 @@ Provider和协议已经通过独立烟测冻结；`test0.9`又完成EVA1的MQTT+
 9. 真机默认三步`swing`可略超15秒；生产动作完成时限提高到30秒，仍保留超时自动stop。ACK时限不变，避免用放宽设备接收门限掩盖断线。
 10. 固件2.0.16把既有显式mDNS解析器接入正式MQTT：首次连接和每次重连都重新解析`master.local`，当次IPv4不写NVS；连接成功后hello/heartbeat继续按MAC、名字和当前DHCP IP更新Server动态表。
 
-当前状态（2026-09-19）：本地锁文件、Ruff、mypy strict、187项pytest、Node语法和差异检查通过；Server新增mDNS地址监视与原位更新，固件2.0.16把显式mDNS接入正式MQTT，完整构建并推送`c4ad28e`。EVA1无需固定IP或重新配网即在新网段自动回连；EVA2/EVA3随后完整烧录2.0.16并分别以正确屏显名称、稳定MAC和独立MQTT身份上线。正式三机batch请求3、接受3、失败0，三条walk均走完requested/published/accepted/moving/completed并回online/idle；EVA2另完成一次按钮触发的MQTT+UDP问答烟测。换网前EVA1五轮问答及用户对话/TTS主观PASS继续有效；EVA2单会话和三机控制都不冒充多设备并发语音通过。详细记录见`docs/sessions/20260919-multidevice-webui-test1.0.md`和`docs/sessions/20260919-mdns-roaming-test1.0.md`。
+当前状态（2026-09-19）：本地锁文件、Ruff、mypy strict、187项pytest、Node语法和差异检查通过；Server新增mDNS地址监视与原位更新，固件2.0.16把显式mDNS接入正式MQTT，完整构建并推送`c4ad28e`。EVA1无需固定IP或重新配网即在新网段自动回连；EVA2/EVA3随后完整烧录2.0.16并分别以正确屏显名称、稳定MAC和独立MQTT身份上线。正式三机batch请求3、接受3、失败0，三条walk均走完requested/published/accepted/moving/completed并回online/idle；EVA2另完成一次按钮触发的MQTT+UDP问答烟测。Server实现与实测记录提交`caf7f7f`对应run `35408550039`的macOS/Windows矩阵全部PASS。换网前EVA1五轮问答及用户对话/TTS主观PASS继续有效；EVA2单会话和三机控制都不冒充多设备并发语音通过。详细记录见`docs/sessions/20260919-multidevice-webui-test1.0.md`和`docs/sessions/20260919-mdns-roaming-test1.0.md`。
 
 纵向 MVP 的硬门禁是“大笑真实结束后才能开始听”。若没有完整的 `sound.busy true→false` 证据，本轮必须失败关闭，ASR 与 LLM 调用数必须为零。
 

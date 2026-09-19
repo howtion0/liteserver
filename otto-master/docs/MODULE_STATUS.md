@@ -1,6 +1,6 @@
 # Module Status
 
-当前已完成Phase 1-4的软件基座和Phase 4E双机控制门禁；`test0.9`完成EVA1的火山ASR/TTS、DeepSeek文本/工具流、MQTT UDP音频和循环WakeGate纵向链，`test1.0`新增多设备WebUI、对话投影、快捷/批量控制、正式对话控制、ASR三端点与清理加固、空识别熔断、动作音效排空判据、TTS增益、固件看山表情和mDNS换网自动刷新。当前本地187个测试通过；上一代码检查点GitHub run `35403562279`的macOS/Windows矩阵通过，本轮mDNS提交的跨平台CI待push后核验。EVA1/EVA2/EVA3均运行2.0.16，以独立身份在新网段MQTT在线，三机同批动作已通过；EVA1完整问答与EVA2单会话烟测已完成。动作图目视、多设备并发语音工具隔离、WebSocket真机与Windows实体部署仍未完成。
+当前已完成Phase 1-4的软件基座和Phase 4E双机控制门禁；`test0.9`完成EVA1的火山ASR/TTS、DeepSeek文本/工具流、MQTT UDP音频和循环WakeGate纵向链，`test1.0`新增多设备WebUI、对话投影、快捷/批量控制、正式对话控制、ASR三端点与清理加固、空识别熔断、动作音效排空判据、TTS增益、固件看山表情和mDNS换网自动刷新。当前本地187个测试通过；mDNS实现提交`caf7f7f`对应GitHub run `35408550039`的macOS/Windows Tests、原生Opus与打包smoke均通过。EVA1/EVA2/EVA3均运行2.0.16，以独立身份在新网段MQTT在线，三机同批动作已通过；EVA1完整问答与EVA2单会话烟测已完成。动作图目视、多设备并发语音工具隔离、WebSocket真机与Windows实体部署仍未完成。
 
 | 模块 | 文件 | 状态 |
 |---|---|---|
