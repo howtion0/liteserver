@@ -6,6 +6,7 @@ server:
   host: 0.0.0.0
   port: 8081
   websocket_path: /xiaozhi/v1/
+  console_auth_required: false
   console_token_env: OTTO_CONSOLE_TOKEN
   allowed_origins:
     - http://127.0.0.1:8081

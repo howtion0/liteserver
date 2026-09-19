@@ -71,6 +71,23 @@ jobs:
           }
           $opusBin | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
 
+      - name: Validate Windows helper scripts
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          Get-ChildItem scripts/windows/*.ps1 | ForEach-Object {
+            $tokens = $null
+            $errors = $null
+            [System.Management.Automation.Language.Parser]::ParseFile(
+              $_.FullName,
+              [ref]$tokens,
+              [ref]$errors
+            ) | Out-Null
+            if ($errors.Count) {
+              throw "PowerShell syntax failed for $($_.Name): $($errors -join '; ')"
+            }
+          }
+
       - name: Verify native Opus loader
         run: >-
           uv run python -c
@@ -78,7 +95,7 @@ jobs:
           assert StreamingOpusEncoder(OpusParameters(16000)).feed(bytes(1920))"
 
       - name: Ruff
-        run: uv run ruff check src tests
+        run: uv run ruff check src tests scripts
 
       - name: Mypy
         run: uv run mypy src

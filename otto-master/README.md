@@ -32,7 +32,7 @@ uv sync --locked
 uv run python -m otto_master
 ```
 
-Windows PowerShell使用 `Copy-Item .env.example .env`。默认Web端口为 `8081`、MQTT为 `1883`、UDP音频为 `8884`，服务通过 `master.local` 发布。暴露到局域网前必须配置高强度 `OTTO_CONSOLE_TOKEN` 和 `OTTO_PROVISIONING_TOKEN`。
+Windows PowerShell使用 `Copy-Item .env.example .env`。默认Web端口为 `8081`、MQTT为 `1883`、UDP音频为 `8884`，服务通过 `master.local` 发布。可信家庭局域网内WebUI默认直接控制，不需要控制令牌；配网/OTA发放仍必须配置高强度 `OTTO_PROVISIONING_TOKEN`。若部署到不可信网络，可将`server.console_auth_required`设为`true`并配置`OTTO_CONSOLE_TOKEN`。
 
 打开 `http://127.0.0.1:8081`。生产静态资源已经包含在Python包中，不需要Node；只有修改仓库根 `../webui/` 时才使用Node.js 22.12+运行：
 
@@ -46,7 +46,8 @@ npm run build
 
 参照 `.env.example` 配置：
 
-- `OTTO_CONSOLE_TOKEN`、`OTTO_PROVISIONING_TOKEN`、`OTTO_MQTT_MASTER_PASSWORD`
+- `OTTO_PROVISIONING_TOKEN`、`OTTO_MQTT_MASTER_PASSWORD`
+- `OTTO_CONSOLE_TOKEN`（仅在显式启用控制台安全模式时使用）
 - `OTTO_ASR_API_KEY`、`OTTO_TTS_API_KEY`、`DEEPSEEK_API_KEY`
 - `ZHIHU_ACCESS_SECRET`
 
@@ -56,7 +57,7 @@ npm run build
 
 ```bash
 uv sync --all-extras --locked
-uv run ruff check src tests
+uv run ruff check src tests scripts
 uv run mypy src
 uv run pytest -q
 uv run python tests/packaging/static_assets_smoke.py
@@ -80,3 +81,6 @@ uv run python tests/external/voice_cloud_smoke.py
 - [docs/MQTT_CONTROL_CONTRACT.md](docs/MQTT_CONTROL_CONTRACT.md)：MQTT控制合同
 - [docs/VOLCENGINE_SPEECH_INTEGRATION.md](docs/VOLCENGINE_SPEECH_INTEGRATION.md)：语音数据流
 - [docs/SERVER_CONSOLE_REQUIREMENTS.md](docs/SERVER_CONSOLE_REQUIREMENTS.md)：控制台与Windows验收
+- [docs/WINDOWS_PORTABLE_GUIDE.md](docs/WINDOWS_PORTABLE_GUIDE.md)：Windows源码包、密钥恢复、Opus与启动验收
+
+Windows交付采用源码ZIP与独立密钥TXT，不生成EXE；源码包禁止包含`.env`、`.local-secrets`、数据库、日志和设备固件。

@@ -1,12 +1,20 @@
 const TOKEN_KEY='otto-console-token';
 let authRejected=false;
+let consoleAuthRequired=false;
 
 export class ApiError extends Error{
  constructor(message:string,readonly status:number,readonly code:string){super(message);this.name='ApiError';}
 }
 
 export function consoleToken(){return window.sessionStorage.getItem(TOKEN_KEY)||'';}
-export function hasConsoleAuthorization(){return Boolean(consoleToken())&&!authRejected;}
+export function isConsoleAuthRequired(){return consoleAuthRequired;}
+export function hasConsoleAuthorization(){return !consoleAuthRequired||(Boolean(consoleToken())&&!authRejected);}
+export function setConsoleAuthRequired(required:boolean){
+ const changed=consoleAuthRequired!==required;
+ consoleAuthRequired=required;
+ if(!required)authRejected=false;
+ if(changed)window.dispatchEvent(new CustomEvent('otto-auth-change'));
+}
 export function setConsoleToken(value:string){
  const normalized=value.trim();
  if(normalized)window.sessionStorage.setItem(TOKEN_KEY,normalized);else window.sessionStorage.removeItem(TOKEN_KEY);
@@ -34,7 +42,7 @@ export async function api<T=unknown>(path:string,method='GET',body?:unknown):Pro
   const response=await fetch('/api'+path,{method,signal:controller.signal,headers,cache:'no-store',credentials:'same-origin',body:body===undefined?undefined:JSON.stringify(body)});
   const data=await response.json().catch(()=>({})) as {error?:{code?:string;message?:string};message?:string};
   if(!response.ok){
-   if(response.status===401){authRejected=true;window.dispatchEvent(new CustomEvent('otto-auth-change'));}
+   if(response.status===401&&consoleAuthRequired){authRejected=true;window.dispatchEvent(new CustomEvent('otto-auth-change'));}
    const code=data.error?.code||String(response.status),message=data.error?.message||data.message||response.statusText||'请求失败';
    throw new ApiError(`${code}: ${message}`,response.status,code);
   }

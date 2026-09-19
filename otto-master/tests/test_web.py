@@ -220,10 +220,16 @@ def _config(
     *,
     host: str = "127.0.0.1",
     console_token: str | None = None,
+    console_auth_required: bool | None = None,
     provisioning_token: str | None = None,
     mqtt_enabled: bool = False,
 ) -> Any:
     loaded = load_config()
+    require_console_auth = (
+        console_token is not None
+        if console_auth_required is None
+        else console_auth_required
+    )
     return replace(
         loaded,
         config_path=tmp_path / "config.yaml",
@@ -232,6 +238,7 @@ def _config(
             enabled=False,
             host=host,
             port=8080,
+            console_auth_required=require_console_auth,
             allowed_origins=("http://testserver",),
         ),
         mqtt=replace(
@@ -322,8 +329,12 @@ async def test_control_plane_static_health_ota_and_errors(tmp_path: Path) -> Non
             app_css = await client.get(style_match.group(1))
             assert app_css.status_code == 200
             assert "console_token" in app_js.text
+            assert "console_auth_required" in app_js.text
+            assert "直接控制" in app_js.text
+            assert "控制未授权" not in app_js.text
             assert "/v1/zhihu/query" in app_js.text
             assert "/v1/commands/actions/batch" in app_js.text
+            assert "/verify" in app_js.text
             assert "/api/session" not in app_js.text
             assert "/api/xiaozhi" not in app_js.text
             assert (await client.get("/faces/neutral.gif")).status_code == 200
@@ -432,6 +443,79 @@ async def test_mutations_require_auth_and_reject_arbitrary_fields(tmp_path: Path
             )
             assert valid_but_not_ready.status_code == 503
             assert valid_but_not_ready.json()["error"]["code"] == "component_not_ready"
+    finally:
+        await _close_context(context)
+
+
+async def test_direct_console_mode_needs_no_token_but_keeps_origin_checks(
+    tmp_path: Path,
+) -> None:
+    config = _config(
+        tmp_path,
+        host="0.0.0.0",
+        console_auth_required=False,
+    )
+    context = await _context(config)
+    app = create_app(context)
+    transport = httpx.ASGITransport(app=app)
+    try:
+        async with httpx.AsyncClient(
+            transport=transport,
+            base_url="http://testserver",
+        ) as client:
+            system = await client.get("/api/v1/system/status")
+            direct = await client.put(
+                "/api/v1/settings",
+                json={"logging_level": "DEBUG"},
+                headers={"Origin": "http://testserver"},
+            )
+            private_lan = await client.put(
+                "/api/v1/settings",
+                json={"logging_level": "INFO"},
+                headers={
+                    "Host": "192.168.50.10:8080",
+                    "Origin": "http://192.168.50.10:8080",
+                },
+            )
+            denied_origin = await client.put(
+                "/api/v1/settings",
+                json={"logging_level": "INFO"},
+                headers={"Origin": "http://attacker.invalid"},
+            )
+
+        assert system.json()["console_auth_required"] is False
+        assert direct.status_code == 200
+        assert private_lan.status_code == 200
+        assert denied_origin.status_code == 403
+        assert denied_origin.json()["error"]["code"] == "origin_denied"
+    finally:
+        await _close_context(context)
+
+
+async def test_required_console_auth_fails_closed_without_configured_token(
+    tmp_path: Path,
+) -> None:
+    config = _config(
+        tmp_path,
+        host="0.0.0.0",
+        console_auth_required=True,
+    )
+    context = await _context(config)
+    app = create_app(context)
+    transport = httpx.ASGITransport(app=app)
+    try:
+        async with httpx.AsyncClient(
+            transport=transport,
+            base_url="http://testserver",
+        ) as client:
+            response = await client.put(
+                "/api/v1/settings",
+                json={"logging_level": "DEBUG"},
+                headers={"Origin": "http://testserver"},
+            )
+
+        assert response.status_code == 503
+        assert response.json()["error"]["code"] == "console_auth_not_configured"
     finally:
         await _close_context(context)
 

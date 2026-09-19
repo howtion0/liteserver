@@ -21,7 +21,7 @@ MVP      version 1.0.0  branch test1.0  EVA1/EVA2完整链路通过
 
 Phase 0和Phase 1已在强制门禁建立前完成但没有GitHub检查点，因此不得伪造两段历史；`test0.1` 是一次性恢复基线。支线编号是连续施工检查点，不是产品版本。若中途增加修复检查点，使用下一个自然编号，后续阶段顺延，不复用旧编号，也不特别处理 `test0.9` 到 `test1.0` 的变化。
 
-实际检查点为：`test0.1=Phase 0+1`、`test0.2=Phase 2`、`test0.3=Phase 3`、`test0.4-0.8=Phase 4A-4E`、`test0.9=EVA1语音/WakeGate/单设备工具纵向MVP`、`test1.0=多设备WebUI/mDNS换网与三机控制`。下一未占用支线是`test1.1`，用于Forge电台前端、知乎官方只读能力和Windows静态交付，不代表整个1.0.0 MVP已完成。
+实际检查点为：`test0.1=Phase 0+1`、`test0.2=Phase 2`、`test0.3=Phase 3`、`test0.4-0.8=Phase 4A-4E`、`test0.9=EVA1语音/WakeGate/单设备工具纵向MVP`、`test1.0=多设备WebUI/mDNS换网与三机控制`、`test1.1=Forge电台/知乎只读/Windows静态交付`。当前`test1.2`用于免令牌直控和动作目录自恢复，不代表整个1.0.0 MVP已完成。
 
 ## 2026-09-18最快MVP关键路径
 
@@ -344,7 +344,17 @@ Provider和协议已经通过独立烟测冻结；`test0.9`又完成EVA1的MQTT+
 5. Gateway限制超时、响应大小和并发，Service保存非敏感画像与有界内存事件；查询失败只返回稳定错误，不影响设备、MQTT或语音主链。
 6. Windows/macOS CI必须同时验证Python/TypeScript、静态资源递归包数据和PyInstaller加载；生产启动仍只有一个Python进程。
 
-当前进度：实现、本机203项回归、真实知乎最小烟测、Runtime HTTP/优雅关闭和macOS PyInstaller静态资源实跑均已通过；`test1.1`提交后的macOS/Windows远程矩阵是本轮最后门禁，未通过前不得把Windows交付写成完成。
+当前进度：`test1.1`实现、本机203项回归、真实知乎最小烟测、Runtime HTTP/优雅关闭、PyInstaller静态资源及run `35412353412`的macOS/Windows远程矩阵均已通过。
+
+### `test1.2` 免令牌直控与动作目录自恢复
+
+1. `server.console_auth_required`默认`false`，可信家庭局域网内打开同源WebUI即可操作；显式设为`true`时继续使用`OTTO_CONSOLE_TOKEN`并失败关闭。
+2. 关闭控制台令牌不关闭Origin校验；仅允许配置白名单、环回/私网IP或`.local`同主机来源。OTA发放令牌、MQTT设备凭据和第三方API密钥边界不变。
+3. WebUI依据`/api/v1/system/status`显示“直接控制”或可选安全模式；默认页面不显示令牌输入，不因浏览器sessionStorage为空而锁定设备、对话或知乎控件。
+4. 命令页发现在线设备动作目录为空时，并行执行只读verify后重取目录；目录恢复本身不能提交动作，失败时显示设备名和原因。
+5. 本轮真机门禁按用户明确授权，让在线EVA2、EVA3各执行一次短距离前进；每条命令必须进入`completed`并回到`idle`，异常时立即stop。
+
+当前进度：实现、本机207项回归、前端干净构建、静态资源smoke、Runtime免令牌HTTP、Windows源码迁移脚手架、EVA2/EVA3目录恢复与各一步前进均已通过；`test1.2`提交后的macOS/Windows远程矩阵是本轮最后门禁。桌面交付只生成源码ZIP和独立密钥TXT，不生成EXE。
 
 验收：
 

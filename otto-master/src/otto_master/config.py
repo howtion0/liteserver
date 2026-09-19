@@ -29,6 +29,7 @@ class ServerConfig:
     host: str
     port: int
     websocket_path: str
+    console_auth_required: bool
     console_token_env: str
     allowed_origins: tuple[str, ...]
 
@@ -548,6 +549,7 @@ def load_config(
             host=_string(server, "host", "server"),
             port=_port(server, "port", "server"),
             websocket_path=_websocket_path(server),
+            console_auth_required=_bool(server, "console_auth_required", "server"),
             console_token_env=console_token_env,
             allowed_origins=_string_list(server, "allowed_origins", "server"),
         ),

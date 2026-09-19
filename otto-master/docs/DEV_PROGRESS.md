@@ -21,7 +21,8 @@
 - 同一支线继续处理同名Wi-Fi换网故障：Server从`192.168.172.225`切到`192.168.122.225`后，旧mDNS实现仍广播启动时地址；固件本地8765链虽显式查询mDNS，正式MQTT此前却仍把`.local`交给底层DNS。Server现已加入5秒IPv4监视、原位更新、瞬时回环保护和失败重试；EVA固件2.0.16让正式MQTT首次连接/每次重连复用显式解析。本地门禁、EVA1换网回连、EVA2/EVA3升级、三机同批动作和run `35408550039`跨平台CI均通过。
 - 配套EVA固件2.0.15源码已推送到`howtion0/otto`的`codex/otto-portable`，远端SHA为`c6addc6a35bf54c6c28f07fde53828cd73bce1f0`；2.0.11恢复点仍为`abb769f1d0f3d1c03fb7a6106bd7288f31c66a98`。
 - EVA固件2.0.16已完整构建、OTA到EVA1并推送`howtion0/otto`的`codex/otto-portable@c4ad28e45adb5f565469d4c14b52aedcb74c1ffb`；随后EVA2和EVA3分别以保底名称完整串口烧录并核对屏显/稳定MAC。EVA2/EVA3应用SHA256分别为`b8d4e7323b5a0d4d3486373bb9c2a0a0fd345a1d4bf9bc88565595d387b1cc1a`和`50f159e5646f47045027b94878527a728e2fab03b0333761710a0a46472652a8`；源码仍是同一远端SHA，2.0.15的`c6addc6`继续作为回滚点。
-- 当前工作支线为`test1.1`，从已验收的`test1.0@18181851401e8ebef516c71d847b76e924c27f26`继续：以Forge电台为前端主版本建立独立`webui/`源码，以Otto Master为后端主版本接入知乎官方只读API，并把完整静态快照纳入Python包和跨平台PyInstaller门禁。实现与本地门禁已完成，远程提交、push和本轮macOS/Windows CI待收口。
+- `test1.1`已从`test1.0@18181851401e8ebef516c71d847b76e924c27f26`完成Forge电台、知乎官方只读API和跨平台静态交付，提交`fd0cfff491e54188383c7023e7a516c252f03eca`已推送；GitHub Actions run `35412353412`的macOS/Windows jobs均PASS。
+- 当前工作支线为`test1.2`：默认可信家庭局域网免控制令牌，保留可选安全模式与Origin限制；Forge命令页对在线空动作目录自动只读verify并刷新。Windows源码ZIP脚手架和独立密钥恢复链已加入，实现、本地207项回归和EVA2/EVA3短前进真机门禁已通过，远程提交、push和本轮macOS/Windows CI待收口。
 - 此后每个阶段或补充检查点使用下一个 `testN.N` 编号。
 - 支线编号与产品版本分别记录，互不驱动。
 
@@ -37,11 +38,11 @@
 | Phase 5 Opus/ASR/TTS | 进行中；火山ASR/TTS、Opus、MQTT加密UDP、独立partial/VAD/12秒硬上限三端点、2.0倍饱和增益和EVA1真实闭环已实现，EVA2单会话烟测成功；多设备并发语音、WebSocket真机与Windows实体矩阵未完成 |
 | Phase 6 WakeGate | 进行中；每轮2秒笑声门禁、循环问答、首次空final笑声恢复/连续第二次退出、仅非空partial取消的8秒静默、按钮/正式Web控制进出、瞬时状态查询重试和失败自恢复已实现 |
 | Phase 7 LLM/Dispatcher/动作 | 部分完成；DeepSeek流式`tools/tool_calls`、当前语音设备Schema、参数校验、TTS后串行工具和Dispatcher桥已实现；动作完成会等待本地音效排空，持久设备组与双机语音工具隔离未完成 |
-| Phase 8 集群/日志/容错 | 部分完成；Forge 3D WebUI已接入真实健康、设备、动作目录交集、批量动作/stop、正式对话、脱敏对话投影和知乎只读查询；长期运行与完整集群策略未完成 |
-| Phase 9 Windows打包 | 进行中；前端静态快照已递归纳入Python package data，本机PyInstaller onefile静态资源实跑通过，macOS/Windows远程矩阵待本轮push后确认，实体Windows局域网仍未验收 |
+| Phase 8 集群/日志/容错 | 部分完成；Forge 3D WebUI已接入真实健康、设备、动作目录自动恢复/交集、批量动作/stop、正式对话、脱敏对话投影和知乎只读查询；默认可信LAN直接控制，可选安全模式保留；长期运行与完整集群策略未完成 |
+| Phase 9 Windows打包 | 进行中；前端静态快照已递归纳入Python package data，`test1.1`远程macOS/Windows PyInstaller矩阵通过；`test1.2`已补源码恢复/bootstrap/verify/run脚本和独立密钥导出，远程矩阵待push后确认，实体Windows局域网仍未验收 |
 | Python业务实现 | Phase 1-4基座及Cloud/ASR/LLM/TTS、RobotToolBridge、DeviceAudioRouter、MQTT UDP、循环WakeGate、多设备Web控制台和知乎官方只读Gateway/Service纵向链已实现 |
-| 自动测试 | 本轮203通过；Ruff、mypy strict（41个源码文件）、TypeScript/Vite干净构建、npm审计、锁文件、静态资源package/PyInstaller smoke和Runtime HTTP闭环通过；`test1.1`远程CI待push后确认 |
-| 硬件验证 | EVA1/EVA2/EVA3均运行2.0.16并分别以`.127/.117/.59`通过`master.local`正式MQTT在线；三机batch请求3、接受3、失败0，分别在5.222/6.229/6.221秒完成并回idle。EVA2另完成单会话MQTT+UDP问答烟测；实体Windows与多设备并发语音仍待门禁 |
+| 自动测试 | 本轮207通过；Ruff、mypy strict（41个源码文件）、TypeScript/Vite干净构建、npm审计、锁文件、静态资源package smoke、Windows密钥导出和Runtime HTTP闭环通过；`test1.2`远程CI待push后确认 |
+| 硬件验证 | EVA1/EVA2/EVA3均运行2.0.16并有正式MQTT控制证据；本轮Runtime重启后EVA2/EVA3在线，15项动作目录经免令牌只读verify恢复，各一步walk分别以命令`fcbe303e-964c-489d-ad61-530e4183bc26`、`8f3f4aa2-4286-435e-a7eb-78d488f05f2d`完成并回idle/sound false。EVA2另有单会话MQTT+UDP问答证据；实体Windows与多设备并发语音仍待门禁 |
 
 ## 已完成
 
@@ -119,24 +120,28 @@
 - EVA2完整串口升级到2.0.16后，正式verify和按钮触发的单会话笑声→ASR→DeepSeek/TTS→再次监听均成功；EVA3以正确名称、MAC和受保护独立MQTT身份接入。正式三机批次`array-eva1-eva2-eva3-20260919-01`请求3、接受3、失败0，所有命令均到completed且三台最终online/idle。
 - `test1.1`在仓库根新增独立Vite/TypeScript `webui/`，保留Forge电台3D模型、贴图和交互；Server页已改接Otto真实健康、设备、动作目录、批量命令、对话、设置、固件和事件API。参考工程的假设备状态、Node/Worker生产后端和浏览器小智音频桥均未迁入。
 - Python后端新增知乎官方只读Gateway/Service：只访问`developer.zhihu.com`，支持额度探针、多种单页查询、非敏感画像和有界元数据事件；2路并发、超时、2 MiB响应上限、无重试和稳定错误均有自动测试。Access Secret只从环境读取，真实额度探针和一次最小热榜查询已通过且输出不含密钥或原始内容。
-- Forge电台结果可由用户显式选择稳定`device_id`后复用既有TTS Service朗读；浏览器仍不接触设备凭据、MQTT、云端语音或知乎密钥。全部知乎/画像/朗读API沿用控制台Bearer授权。
+- Forge电台结果可由用户显式选择稳定`device_id`后复用既有TTS Service朗读；浏览器仍不接触设备凭据、MQTT、云端语音或知乎密钥。全部知乎/画像/朗读API沿用当前控制台访问策略。
 - 前端`npm ci --ignore-scripts && npm run build`通过，41个模块构建为哈希JS/CSS和离线模型/图片/GIF快照；Python静态入口、嵌套包数据及本机PyInstaller onefile实跑均通过。Runtime优雅关闭后8081/1883/8884全部释放，最终构建重启后健康、Forge首页、授权边界、知乎配置和设备列表HTTP smoke通过；只读观察到3台登记、2台在线，本轮未下发动作。
 - 本轮本地最终门禁为`203 passed`、Ruff、mypy strict（41个源码文件）、`uv lock --check`、npm 0漏洞、前端禁用链扫描、精确密钥扫描及`git diff --check`。外部知乎烟测只调用一次额度和一次最小只读查询；远程macOS/Windows CI仍须在提交push后回填。
+- `test1.2`新增`server.console_auth_required`并默认关闭：同源、白名单、环回/私网IP和`.local`来源可直接控制，恶意外部Origin仍返回403；显式安全模式下无令牌401、未配置令牌503、正确令牌通过。OTA发放、MQTT和云密钥边界不变。
+- Forge UI默认显示“直接控制”且不显示令牌输入；在线目录为空时会并行执行只读verify后重取目录。正式Runtime重启后EVA2/EVA3从0项恢复到各15项，随后无Authorization、带同源Origin的一步walk均走完published/moving/completed，并回到idle且sound false。
+- `test1.2`本地门禁为`207 passed`、Ruff、mypy strict（41个源码文件）、`uv lock --check`、npm干净安装/TypeScript/Vite 41模块构建、npm 0漏洞、静态资源smoke和`git diff --check`；新增源码ZIP、独立mode-0600密钥TXT、PowerShell恢复/bootstrap/verify/run脚本，明确不生成EXE；远程macOS/Windows CI待提交push后确认。
 
 ## 进行中
 
-- `test1.1` Forge前端、知乎只读后端、根目录GitHub README和本地门禁已完成；尚需精确提交、push并等待同一SHA的macOS/Windows CI与静态资源PyInstaller job通过。
-- `test1.0`真机能力保持不变；仍需由用户确认看山动作图切换/恢复。`test1.1`没有修改固件，也没有用只读设备在线状态替代任何动作或语音真机验收。
+- `test1.2`免令牌直控、动作目录自恢复、本地回归和EVA2/EVA3真机前进门禁已完成；尚需精确提交、push并等待同一SHA的macOS/Windows CI与静态资源PyInstaller job通过。
+- `test1.0`真机能力保持不变；仍需由用户确认看山动作图切换/恢复。`test1.2`没有修改固件或语音链路。
 - 完整Phase 5仍欠多设备并发语音/工具隔离、WebSocket真机Profile和实体Windows Opus/局域网门禁。EVA2单会话成功不能冒充双机或三机并发语音通过。
 - 多设备WebUI已经具备显式目标和并发控制；持久设备组、普通广播策略和多设备同时语音真机仍是后续范围。
 
 ## 下一步
 
-先完成`test1.1`精确提交、远端哈希和macOS/Windows CI收口后暂停。下一轮再由用户确认看山动作图，并补多设备并发语音/工具隔离、WebSocket真机Profile与实体Windows。
+先完成`test1.2`精确提交、远端哈希和macOS/Windows CI收口后暂停。下一轮再由用户确认看山动作图，并补多设备并发语音/工具隔离、WebSocket真机Profile与实体Windows。
 
 ## 已知风险
 
-- Forge静态资源已通过本机PyInstaller收集，GitHub工作流也已增加macOS/Windows同一可执行文件实跑；远程结果在`test1.1` push前不能预判为PASS，实体Windows仍需验证防火墙、mDNS和Opus DLL分发。
+- Forge静态资源已通过本机PyInstaller收集，`test1.1` GitHub macOS/Windows同一可执行文件实跑已通过；`test1.2`远程结果在push前不能预判为PASS，实体Windows仍需验证防火墙、mDNS和Opus DLL分发。
+- 默认免令牌控制只适用于可信家庭局域网；任何把8081暴露到访客网、端口映射或公网的部署都应先启用`server.console_auth_required`并配置高强度令牌。无Origin的原生HTTP客户端仍可直接调用，这是用户选择“简单直控”的明确代价。
 - 火山ASR/TTS适配器、音频背压、EVA1完整真机和EVA2单会话已验证；多设备并发语音、WebSocket真机和Windows `libopus` 打包尚未验证。Provider字段仍须通过Gateway隔离，不能泄漏到领域合同。
 - 当前账号的ASR 2.0资源请求返回403，Phase 5先使用已验证的ASR 1.0时长版；2.0开通前不得自动切换或把403误报为密钥整体失效。
 - DeepSeek真实tool schema和tool-call消费已实现，但当前只允许当前语音设备的单调用；工具轮即使有已朗读前置句也不保留普通文本历史，直到`ChatMessage`支持规范的assistant tool_calls与tool result结构。双设备语音隔离和长时间稳定性仍待验收。

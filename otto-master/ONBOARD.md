@@ -52,12 +52,12 @@ mDNS / OTA     ───┘                                  ├─ WakeGate
 | Phase 4 MQTT与Device Session | 进行中；软件门禁、EVA1/EVA2双机和EVA1/EVA2/EVA3正式MQTT批量动作通过，WebSocket真机Profile待验收 |
 | Phase 5-7 语音/对话/工具 | 进行中；EVA1完整MQTT+UDP问答和工具闭环、EVA2单会话通过，多设备并发语音待验收 |
 | Python业务代码 | Runtime、设备、语音、Dispatcher、Forge控制台和知乎官方只读Gateway/Service已接入同一进程 |
-| WebUI | 源码位于仓库根`webui/`，Forge 3D界面已接真实健康、设备、命令、对话、设置、OTA和知乎API；生产使用Python包内构建快照 |
+| WebUI | 源码位于仓库根`webui/`，Forge 3D界面已接真实健康、设备、命令、对话、设置、OTA和知乎API；可信LAN默认直接控制，空动作目录自动只读恢复；生产使用Python包内构建快照 |
 | SQLite数据库 | 运行时自动创建并迁移 |
 | 固件文件 | 未放入 |
-| 测试 | `test1.1`本机203项、Ruff、mypy、TypeScript/Vite、Runtime HTTP和PyInstaller静态资源smoke通过；本轮远程macOS/Windows CI待push后确认 |
+| 测试 | `test1.2`本机207项、Ruff、mypy、TypeScript/Vite、Runtime HTTP、静态资源smoke、Windows源码密钥导出测试和EVA2/EVA3免令牌前进门禁通过；本轮远程macOS/Windows CI待push后确认 |
 
-当前工程由一个Python进程启动控制面、Broker、MQTT/UDP/TCP/设备WebSocket、Device Manager、Dispatcher、WakeGate、云端语音/LLM和知乎只读Service。EVA1/EVA2/EVA3均有2.0.16稳定身份和正式MQTT控制证据；`test1.1`不修改固件，也没有把设备在线状态冒充新的动作或并发语音验收。未完成项以`docs/DEV_PROGRESS.md`为准。
+当前工程由一个Python进程启动控制面、Broker、MQTT/UDP/TCP/设备WebSocket、Device Manager、Dispatcher、WakeGate、云端语音/LLM和知乎只读Service。EVA1/EVA2/EVA3均有2.0.16稳定身份和正式MQTT控制证据；`test1.2`未修改固件，EVA2/EVA3各一步前进已真实完成，但没有把它冒充并发语音验收。默认直控只适用于可信家庭局域网；对不可信网络应开启`server.console_auth_required`。未完成项以`docs/DEV_PROGRESS.md`为准。
 
 ## 5. 文档索引
 
@@ -78,6 +78,7 @@ mDNS / OTA     ───┘                                  ├─ WakeGate
 | MQTT控制、迁移和EVA真机验收 | `docs/MQTT_CONTROL_CONTRACT.md` |
 | Phase 5火山ASR/TTS、Opus数据流和复用边界 | `docs/VOLCENGINE_SPEECH_INTEGRATION.md` |
 | Server控制台与打包前验收 | `docs/SERVER_CONSOLE_REQUIREMENTS.md` |
+| Windows源码包恢复与启动 | `docs/WINDOWS_PORTABLE_GUIDE.md` |
 | 调试路线 | `docs/DEBUG_GUIDE.md` |
 
 ## 6. 开发环境

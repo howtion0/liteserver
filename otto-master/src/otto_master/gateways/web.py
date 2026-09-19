@@ -11,6 +11,7 @@ from collections.abc import Awaitable, Callable, Mapping, MutableMapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from importlib.metadata import PackageNotFoundError, version
+from ipaddress import ip_address
 from pathlib import Path
 from time import monotonic
 from typing import Any, Literal, Protocol, cast
@@ -654,29 +655,46 @@ def _validate_origin(
     if origin is None or origin in allowed_origins:
         return True
     parsed = urlsplit(origin)
-    return (
+    if not (
         allow_same_host
         and parsed.scheme in {"http", "https"}
         and parsed.netloc == host
-    )
+    ):
+        return False
+    hostname = parsed.hostname
+    if hostname is None:
+        return False
+    normalized = hostname.lower().rstrip(".")
+    if _is_loopback(normalized) or normalized.endswith(".local"):
+        return True
+    try:
+        address = ip_address(normalized)
+    except ValueError:
+        allowed_hosts = {
+            candidate.hostname.lower().rstrip(".")
+            for value in allowed_origins
+            if (candidate := urlsplit(value)).hostname is not None
+        }
+        return normalized in allowed_hosts
+    return address.is_private or address.is_loopback or address.is_link_local
 
 
 def _require_console_access(request: Request, config: AppConfig) -> None:
-    expected = config.secrets.console_token
     if not _validate_origin(
         request.headers.get("origin"),
         config.server.allowed_origins,
         request.headers.get("host"),
-        allow_same_host=expected is not None,
+        allow_same_host=True,
     ):
         raise ApiError(403, "origin_denied", "request origin is not allowed")
+    if not config.server.console_auth_required:
+        return
+    expected = config.secrets.console_token
     if expected is None:
-        if _is_loopback(config.server.host):
-            return
         raise ApiError(
             503,
             "console_auth_not_configured",
-            f"set {config.server.console_token_env} before enabling LAN mutations",
+            f"set {config.server.console_token_env} when console authentication is required",
         )
     provided = _provided_bearer(request)
     if provided is None or not hmac.compare_digest(provided, expected):
@@ -949,6 +967,7 @@ def create_app(context: WebContext) -> FastAPI:
             "discovery_hostname": advertised_host,
             "http_port": context.config.server.port,
             "mqtt_port": context.config.mqtt.port,
+            "console_auth_required": context.config.server.console_auth_required,
             "console_auth_configured": context.config.secrets.console_token is not None,
         }
 
@@ -1269,6 +1288,7 @@ def create_app(context: WebContext) -> FastAPI:
             "server": {
                 "host": context.config.server.host,
                 "port": context.config.server.port,
+                "console_auth_required": context.config.server.console_auth_required,
                 "console_auth_configured": context.config.secrets.console_token is not None,
             },
             "mqtt": {

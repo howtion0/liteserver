@@ -320,3 +320,14 @@
 - 本地门禁：`uv lock --check`、Ruff、mypy strict（41个源码文件）、全量`203 passed`、npm 0漏洞、前端禁用链扫描、源码静态资源smoke和PyInstaller onefile实跑均PASS。Runtime优雅关闭后8081/1883/8884全部释放；最终构建重启后Forge首页、哈希资源、健康、知乎401/授权状态和设备列表HTTP smoke通过，3台登记、2台在线，本轮未下发动作。
 - 返工：只读验收脚本先后使用了错误CI相对路径、错误前端源码层级、编译包API/设备状态字段及便携扫描工作目录；均未改动生产数据，已通过显式目录断言和真实HTTP字段重跑。Vite生成JS内Three.js GLSL模板的上游尾随空格触发Git误报，现只对该生成路径设置`-whitespace`，源码检查不放宽。旧遗留Runtime曾无法响应SIGTERM且内存异常，精确强制终止后SQLite完整性为`ok`；本轮新Runtime随后证明可正常SIGINT退出。
 - 文档：更新根目录GitHub `README.md`、后端README、ONBOARD、架构、施工计划、进度、模块状态、控制台要求和本Session Contract。远程commit、push及同一SHA的macOS/Windows CI在本地最终审计后执行并回填交付结果。
+
+### 2026-09-19 / test1.2 / 免令牌直控、动作目录自恢复与EVA2/EVA3门禁
+
+- 用户决策：家庭可信局域网优先打开即用，不再要求控制令牌。新增`server.console_auth_required`，生产默认`false`；未来显式设为`true`时仍使用环境中的`OTTO_CONSOLE_TOKEN`并在缺失/错误时失败关闭。
+- 安全边界：关闭控制台Bearer不关闭Origin校验；配置白名单、环回/私网IP及`.local`同主机来源可用，恶意外部域名被拒绝。OTA发放令牌、MQTT设备凭据、火山/DeepSeek/知乎密钥及Dispatcher动作门禁均未改变。
+- WebUI：总览显示“直接控制”，默认设置页不渲染令牌输入；设备、对话、知乎和批量动作控件不再因空sessionStorage锁定。在线设备动作目录为空时，命令页并行调用既有只读verify并重新拉取目录；仍为空时显示设备名和失败原因，恢复过程本身不下发动作。
+- 自动测试：新增默认直控、私网同源、恶意Origin拒绝、显式安全模式、无令牌失败关闭和Windows密钥导出回归。`uv lock --check`、Ruff、mypy strict（41个源码文件）、全量`207 passed`、npm干净安装、TypeScript/Vite 41模块构建、npm 0漏洞及静态资源smoke均通过。曾并行运行Vite清理和pytest导致一次瞬时首页404；按生产构建后再测试的正确顺序串行重跑全绿，未修改产品逻辑。
+- 运行态：旧`test1.1` Runtime经SIGINT完整关闭，新Runtime在8081/1883/8884启动并广播`192.168.122.225`。无Authorization即可读取私有对话/设置；EVA2/EVA3均online，初始动作目录为0，免令牌并行verify全项通过后各恢复15项。
+- 真机：按用户明确授权，EVA2一步walk命令`fcbe303e-964c-489d-ad61-530e4183bc26`、EVA3一步walk命令`8f3f4aa2-4286-435e-a7eb-78d488f05f2d`依次完成`published → moving → completed`。两台随后verify通过并回到`idle`、`sound_busy=false`；没有向离线EVA1或其他动作下发命令。
+- Windows源码交付：新增不回显值的密钥导出工具，以及restore/bootstrap/verify/run PowerShell脚本和独立指南。ZIP只取Git提交树，不含`.env`、`.local-secrets`、数据库、日志、缓存、固件或EXE；独立TXT以0600权限保存云API、Server凭据和3台现有EVA MQTT身份。
+- Git与CI：本地实现和门禁完成，待精确提交并push `test1.2`，随后等待同一SHA的macOS/Windows矩阵；不合并main、不打tag。

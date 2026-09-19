@@ -54,6 +54,7 @@ def test_repository_config_loads_without_exposing_secret_values() -> None:
     assert config.device_websocket.enabled is True
     assert config.device_websocket.heartbeat_seconds == 5
     assert config.server.websocket_path == "/xiaozhi/v1/"
+    assert config.server.console_auth_required is False
     assert config.secrets.console_token == "console-super-secret"
     assert config.secrets.mqtt_master_password == "mqtt-super-secret"
     assert config.secrets.provisioning_token == "provision-super-secret"

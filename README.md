@@ -50,7 +50,6 @@ Open [http://127.0.0.1:8081](http://127.0.0.1:8081). The same process also expos
 Fill only the values you use in `otto-master/.env`:
 
 ```dotenv
-OTTO_CONSOLE_TOKEN=replace_me
 OTTO_PROVISIONING_TOKEN=replace_me
 OTTO_MQTT_MASTER_PASSWORD=replace_me
 OTTO_ASR_API_KEY=replace_me
@@ -58,6 +57,8 @@ OTTO_TTS_API_KEY=replace_me
 DEEPSEEK_API_KEY=replace_me
 ZHIHU_ACCESS_SECRET=replace_me
 ```
+
+The WebUI uses direct control by default on the trusted home LAN, so no console token is needed. To opt into console authentication, set `server.console_auth_required: true` in `otto-master/config.yaml` and define `OTTO_CONSOLE_TOKEN`; OTA provisioning remains independently protected by `OTTO_PROVISIONING_TOKEN`.
 
 Secrets are loaded only by the Python runtime. `.env`, databases, logs, firmware binaries, audio, and credentials are Git-ignored. Zhihu access is limited to official read-only Open Platform endpoints; the server does not use cookies, scrape pages, publish content, auto-page, or automatically retry uncertain requests.
 
@@ -78,7 +79,7 @@ The build runs TypeScript checks and writes the reproducible deployment snapshot
 ```bash
 cd otto-master
 uv sync --all-extras --locked
-uv run ruff check src tests
+uv run ruff check src tests scripts
 uv run mypy src
 uv run pytest -q
 ```
@@ -103,7 +104,12 @@ Otto Master is a modular monolith: gateways translate external protocols, the in
 - [Development progress](otto-master/docs/DEV_PROGRESS.md)
 - [Server console requirements](otto-master/docs/SERVER_CONSOLE_REQUIREMENTS.md)
 - [Volcengine speech integration](otto-master/docs/VOLCENGINE_SPEECH_INTEGRATION.md)
+- [Windows portable source guide](otto-master/docs/WINDOWS_PORTABLE_GUIDE.md)
+
+The Windows handoff is source-only: export the committed tree as a ZIP and deliver
+the API/device secrets in a separate local TXT. No EXE or secret is included in the
+source archive.
 
 ## Security note
 
-Never commit a real `.env` or paste production credentials into issues, logs, screenshots, or browser storage. Rotate any credential that has been exposed outside the local environment before a production deployment.
+Direct control is intended only for a trusted LAN; do not expose port `8081` directly to the internet. Never commit a real `.env` or paste production credentials into issues, logs, screenshots, or browser storage. Rotate any credential that has been exposed outside the local environment before a production deployment.
