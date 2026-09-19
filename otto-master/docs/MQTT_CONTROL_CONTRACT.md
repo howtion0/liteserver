@@ -13,7 +13,7 @@
 
 Phase 5语音链继续遵守这条边界：MQTT只承载TTS/listen等JSON信令，连续Opus仍走加密UDP；内部Message Bus只发布音频元数据和短期 `frame_ref`。三传输共同的身份、选择和命令路由见 `docs/DEVICE_TRANSPORT_CONTRACT.md`；火山ASR/TTS、PCM/Opus转换和完整数据流见 `docs/VOLCENGINE_SPEECH_INTEGRATION.md`。
 
-## 2. 固件2.0.5历史能力与2.0.15现状
+## 2. 固件2.0.5历史能力与2.0.16现状
 
 ### 已有能力
 
@@ -46,6 +46,8 @@ Phase 5语音链继续遵守这条边界：MQTT只承载TTS/listen等JSON信令�
 `2.0.12-2.0.13`只加固本地显示、调度与音量，不改变MQTT Topic或命令JSON：中央旧大眼区域替换为看山表情/动作图，顶部状态栏和底部聊天文字保持；动作任务优先级降低；输出音量先迁移到90，再根据真机反馈迁移到100。`test1.0`的Web批量动作仍在Server拆成多个精确单设备命令，不向MQTT发布通配动作。
 
 `2.0.14-2.0.15`把动作图绑定到本地动作任务真实生命周期，并增加正式`otto_conversation` start/stop与`conversation_control`能力。固件验证当前状态和本地动作/音效空闲后，必须先发送、缓存带相同ID的`otto_conversation_ack`，再异步执行可能阻塞的音频通道切换；重复ID只重放ACK。状态运行态新增display别名、`sound.busy/name`和输出音量，不改变Topic边界。
+
+`2.0.16`修正发现链的最后一段：既有`OttoMasterLink`本来会显式查询`master.local`，但正式`MqttProtocol`此前仍把`.local`主机名直接交给ESP MQTT/路由器DNS。现在首次连接及每次重连都复用显式mDNS解析，只把当次IPv4传给MQTT Client，不把数值地址写入NVS。连接成功后hello和heartbeat继续上报MAC、名字及当前DHCP IP，Server按稳定device_id更新动态表。
 
 `test0.9`的LLM工具桥不新增MQTT旁路：DeepSeek只产生内部结构化调用，Server固定当前语音`device_id`、校验动作目录与参数后，仍由Dispatcher编码为精确设备down Topic并等待既有ACK/moving/idle生命周期。模型不能提供Topic、MAC、transport或广播目标。
 
@@ -273,17 +275,20 @@ Config / Logging / MessageBus / Storage
 - ACK或完成超时不重发动作，而是标记timeout并排入安全stop；传输断开标记disconnected。
 - Phase 4C原始证据来自真实内嵌Broker与两个fake客户端；Phase 4E随后在固件2.0.6的EVA1/EVA2上通过stop、hello/heartbeat、14动作、隔离、相同ID重复投递与Server/Broker重启恢复。
 
-## 10. EVA1/EVA2真机验收
+## 10. EVA1/EVA2/EVA3真机验收
+
+设备的MQTT Server配置必须是`mqtt://master.local:1883`或等价主机名端点，不能持久化开发机的DHCP地址。`master.local`是局域网mDNS名称，不是固定DNS或固定IP：Server按配置周期监视本机IPv4，地址变化时更新同一个服务记录；短暂只剩回环地址或更新失败时保留最后一个有效LAN记录并重试。健康接口必须公开当前广播地址和刷新状态。
 
 已知环境基线：
 
 ```text
-Wi-Fi: EVA1、EVA2和开发机位于同一局域网
-Master: master.local
-Firmware: EVA1当前2.0.15；EVA2当前2.0.9且关机；两台2.0.6 MQTT验收只保留为历史共同基线
-EVA1当前IP: 192.168.172.127（仅诊断）
-EVA2当前IP: 192.168.172.117（仅诊断）
-动作目录: EVA1当前15个（含laugh）；两台2.0.6历史共同基线为14个
+Wi-Fi: EVA1、EVA2、EVA3和开发机位于同一局域网
+Master: master.local（当前Server诊断地址192.168.122.225）
+Firmware: EVA1、EVA2、EVA3当前均为2.0.16；两台2.0.6 MQTT验收只保留为历史共同基线
+EVA1当前IP: 192.168.122.127（仅诊断，2.0.16已通过显式mDNS自动MQTT回连）
+EVA2当前IP: 192.168.122.117（仅诊断，2.0.16已通过显式mDNS自动MQTT回连）
+EVA3当前IP: 192.168.122.59（仅诊断，2.0.16已通过显式mDNS接入）
+动作目录: 三台当前各15个（含laugh）；两台2.0.6历史共同基线为14个
 ```
 
 正式验收不得依赖上述IP固定不变。测试通过条件：
@@ -310,3 +315,10 @@ EVA2当前IP: 192.168.172.117（仅诊断）
 - 缺少`current_token`的二次发放在EVA1真机返回`provisioning is locked`，原MQTT身份、名称和连接保持不变。
 - Otto Master与Broker完整重启后，两台无需重启即重新hello；EVA1/EVA2 verify分别615.000 ms和91.554 ms通过，WebUI HTTP 200，最终集群stop后均online/idle。
 - 尚未通过：实体Windows局域网；它属于Phase 9，不由macOS真机或Windows CI替代。
+
+### 2026-09-19 test1.0三机扩展快照
+
+- EVA2已由2.0.9串口完整升级到2.0.16，MAC/name仍为`aca704ed89a8 / EVA2`；EVA3以`288485478f34 / EVA3`接入，三台使用不同client、用户名和精确`otto/v1/devices/{device_id}/{up|down}` Topic。
+- EVA1/EVA2批次`array-eva1-eva2-20260919-01`请求2、接受2、失败0，两台分别在5,154.350 ms和5,216.091 ms走完完整生命周期并回idle。
+- 三机批次`array-eva1-eva2-eva3-20260919-01`请求3、接受3、失败0。EVA1命令`c0ea38d2-18ca-4935-95c7-fd96b75e3875`在5,222.059 ms完成，EVA2命令`aa933b9f-1565-421a-ac94-e1d84d89777d`在6,228.517 ms完成，EVA3命令`1856da68-5a84-428a-b71d-50d4b252108c`在6,221.399 ms完成；最终三台均online/idle。
+- 当前Broker连接为Master加三台设备共4个；该次运行Gateway拒绝数、发布失败数均为0，Dispatcher无active/queued命令。以上证明三机控制目标隔离，不替代三机并发语音/工具门禁。

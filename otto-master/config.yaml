@@ -66,6 +66,7 @@ discovery:
   enabled: true
   hostname: master.local
   service_type: _otto-master._tcp.local.
+  refresh_interval_seconds: 5
 
 database:
   path: data/otto.db
@@ -137,7 +138,7 @@ cloud:
 ota:
   enabled: true
   firmware_path: firmware/xiaozhi.bin
-  firmware_version: 2.0.15
+  firmware_version: 2.0.16
   target_hardware: esp32s3-otto
   provisioning_token_env: OTTO_PROVISIONING_TOKEN
 

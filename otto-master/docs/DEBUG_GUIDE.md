@@ -25,11 +25,25 @@
 
 - macOS与Windows能否访问WebUI。
 - `master.local` 是否解析到正确局域网地址。
+- Server切换网段后，mDNS是否在配置周期内把记录从旧地址更新为当前地址，而不要求重启Server。
 - OTA不存在固件时是否返回明确404而不是空文件。
 - 服务器关闭时mDNS记录是否注销。
 - 内嵌Broker是否监听配置端口并在Runtime关闭时释放端口。
 - 匿名连接、错误密码和跨设备Topic访问是否被拒绝。
 - OTA是否按MAC返回唯一client_id和up/down Topic。
+
+### 同名Wi-Fi或热点切换后设备不上线
+
+同一个SSID只表示无线网络名称相同，不保证网关、子网和DHCP租约相同。先区分“设备未入网”和“设备已经入网但MQTT仍在连接旧Server地址”：
+
+1. 查看开发机当前LAN地址，并与`GET /api/v1/health`中`components.mdns.addresses`比较；两者必须处于当前网段。
+2. 查看mDNS的`monitor_running`、`refresh_count`、`refresh_failures`和`last_error`。换网后最多等待一个`refresh_interval_seconds`周期，`master.local`应更新，无需重启Server。
+3. 用ARP、路由器租约或ping确认设备当前地址。能ping通但`GET /api/v1/devices`仍是offline，表示Wi-Fi已经成功，问题位于mDNS缓存、MQTT TCP会话或客户端重连，不应重新配网或写死IP。
+4. 切换瞬间只发现`127.0.0.1`时，Server故意保留最后一个LAN记录，直到获得新LAN地址；更新调用失败也保留旧记录并自动重试，健康状态会降级。
+5. Server记录已经正确而个别设备仍长时间offline时，先核对固件版本、首选transport和Broker认证。2.0.15及更早版本的本地8765链会显式查mDNS，但正式MQTT仍可能依赖底层DNS；2.0.16起正式MQTT每次连接/重连也显式解析。手工重启只能作为最后恢复手段，不能代替自动重连验收，更不能把固件改成固定IP。
+6. 更换Server主机时，新主机发布同一个`master.local`即可接管地址发现；还要安全迁移`.local-secrets/mqtt-credentials.json`，否则新Broker会正确拒绝设备保存的旧凭据。`data/otto.db`用于恢复设备名字、状态和历史，不取代认证存储。
+
+2026-09-19现场案例：开发机从`192.168.172.225`切到`192.168.122.225`，EVA1/EVA2分别已取得`192.168.122.127`和`192.168.122.117`，但旧Server进程仍广播`192.168.172.225`。根因一是mDNS Gateway只在进程启动时取一次地址，根因二是固件正式MQTT未复用本地验证链已有的显式解析。Server自动刷新与固件2.0.16两侧修复后，EVA1无需固定IP或重新配网即以新地址自动MQTT回连。
 
 ## Phase 4：MQTT集群控制与兼容传输
 

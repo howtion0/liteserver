@@ -1,6 +1,6 @@
 # Phase 5 火山引擎语音接入设计
 
-本文档冻结 Otto Master Phase 5 的 ASR、TTS、Opus 数据流、云协议、复用边界和验收标准，并记录 `test0.9` 已完成的单机纵向实现及`test1.0`音量加固。EVA1 的 MQTT+加密UDP真实闭环已经通过；双设备、双Profile和Windows打包矩阵仍未完成。
+本文档冻结 Otto Master Phase 5 的 ASR、TTS、Opus 数据流、云协议、复用边界和验收标准，并记录 `test0.9` 已完成的单机纵向实现及`test1.0`音量加固。EVA1的完整MQTT+加密UDP闭环和EVA2单会话烟测已经通过；多设备并发语音、双Profile和Windows打包矩阵仍未完成。
 
 ## 1. 当前结论
 
@@ -66,7 +66,7 @@
 
 - TTS Service在Opus编码前对火山返回的24 kHz单声道S16LE PCM应用`audio.tts_pcm_gain`。每个样本四舍五入并饱和到`[-32768, 32767]`，不得发生整数回绕；任意HTTP块边界拆开的单个字节会保留到下一块，最终残留半个采样视为Provider协议错误。
 - 首轮真实短句在1.5倍时得到113,398字节PCM、约2.362秒音频；峰值从30,365升到32,768，RMS从4,338.5升到6,412.2，182个样本发生饱和，约占0.32%。这些数字仅描述该短句，不外推为所有文本的响度或削波比例。
-- 用户仍反馈1.5倍和设备音量90偏小，因此生产配置调整为2.0，EVA1固件2.0.13把持久输出音量迁移到100；当前2.0.15继续保留该档位。OTA后hello已报告`firmware_version=2.0.15`，心跳运行态报告`output_volume=100`，Server健康状态报告`pcm_gain=2.0`。
+- 用户仍反馈1.5倍和设备音量90偏小，因此生产配置调整为2.0，EVA1固件2.0.13把持久输出音量迁移到100；当前2.0.16继续保留该档位。2.0.15 OTA后已用心跳验证`output_volume=100`，2.0.16换网修复后hello确认新版本与当前DHCP IP，Server健康状态继续报告`pcm_gain=2.0`。
 - 修复后五轮真实问答均完成TTS，用户随后确认“对话感觉没问题了”；因此当前2.0倍增益、设备音量100下的清晰度、流畅度和明显削波主观门禁记为PASS。若后续其他文本暴露破音，应改用压缩/限幅策略，不继续提高硬增益。
 
 ### 2.6 `test1.0` ASR端点与动作音效时序加固
@@ -77,6 +77,11 @@
 - 首次真机复测在最后一次`false`后1.202秒触发`vad_silence`，148 ms后火山返回空final，证明原30秒悬挂已可被兜底，也暴露旧WakeGate会停在`recognizing`。最终策略是首次空final执行一次本地大笑并重开监听，连续第二次空final以`empty_transcription_limit`正常退出；不调用LLM、不增加turn、不因重复final重复动作。EVA1已真实走完“两次空final→一次笑声→waiting”，无第三次笑声、无failed、ASR和UDP活动数均归零。
 - 修复后EVA1另完成五轮有效问答，五轮都由`partial_stability`收句：首个partial约1.102至4.538秒，端点约3.309至8.304秒，final约0.078至0.196秒；火山ASR、DeepSeek和TTS均无失败。另一次纯等待期间即使收到9次VAD-only事件，也在开放监听后精确约8秒以`idle_timeout`退出，证明环境噪声不能续命。
 - Dispatcher把设备`sound_busy=true`同时纳入新动作准入和完成判据。动作舵机已idle但本地OGG仍播放时，持久命令继续保持moving；只有`action_state=idle`且`sound_busy!=true`才completed，旧固件未上报该字段时保持兼容。WakeGate开场笑声遇到`device_state_unsafe`时也反复查询这两个条件，不把一次idle快照误当作共享音频解码器已经空闲。
+
+### 2.7 `test1.0` EVA2单会话烟测
+
+- EVA2升级到2.0.16并以独立device_id `aca704ed89a8`上线后，按钮会话`faa4eea4-b809-4e34-b835-0b221fcbbd5c`经MQTT信令和加密UDP音频进入listening。
+- 串口和Server对话投影记录了本地笑声、ASR最终文本“你好，你是谁？”、奶龙短回复、火山TTS和再次监听，最终无活动ASR/UDP遗留。该证据确认EVA2单设备路径可用，但没有用户听感确认，也没有与EVA1/EVA3同时开语音会话，因此多设备并发隔离仍为NOT RUN。
 
 ## 3. 端到端数据流
 

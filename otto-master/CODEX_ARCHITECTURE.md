@@ -123,7 +123,7 @@ Gateway or Storage consumes output
 - 将Dispatcher的单设备命令编码后发布到精确down Topic。
 - 维护MQTT连接重试、命令超时和协议级指标。
 
-当前实现边界：Phase 4A-4C已实现安全上行、白名单查询、动作/stop、精确down发布和ACK/状态映射；Phase 4E已在EVA1/EVA2固件2.0.6上完成真实MQTT控制门禁。`test0.9`进一步让语音JSON经MQTT、连续Opus经AES-128-CTR UDP传输，并在EVA1上完成单机流式问答、循环门禁和8秒静默退出验收；`test1.0`的EVA1固件为2.0.15，正式对话控制在执行可能阻塞的音频切换前先返回关联ACK。
+当前实现边界：Phase 4A-4C已实现安全上行、白名单查询、动作/stop、精确down发布和ACK/状态映射；Phase 4E已在EVA1/EVA2固件2.0.6上完成真实MQTT控制门禁。`test0.9`进一步让语音JSON经MQTT、连续Opus经AES-128-CTR UDP传输，并在EVA1上完成单机流式问答、循环门禁和8秒静默退出验收；`test1.0`让正式对话控制在执行可能阻塞的音频切换前先返回关联ACK，2.0.16又让正式MQTT首次连接和每次重连都显式解析`master.local`，只把当次IPv4交给MQTT Client。当前EVA1/EVA2/EVA3均以独立身份运行2.0.16，三机批量动作完整完成；这只证明控制平面隔离，不等于多设备并发语音验收。
 
 规则：
 
@@ -187,8 +187,11 @@ API Key只从 `OTTO_ASR_API_KEY`、`OTTO_TTS_API_KEY` 对应环境变量读取�
 
 职责：
 
-- 使用Python `zeroconf` 发布 `master.local` 和服务记录。
-- 在关闭时注销服务。
+- 使用Python `zeroconf` 发布 `master.local` 和服务记录，设备配置和OTA发放只保存主机名，不保存Server的租约IP。
+- 启动时解析当前IPv4，并按`discovery.refresh_interval_seconds`周期重新读取接口地址；地址变化时原位更新同一mDNS服务记录。
+- Wi-Fi切换期间若暂时只剩回环地址，继续保留最后一个可用LAN记录；更新失败时保留旧记录、公开失败状态并在下一周期重试。
+- 在关闭时先停止地址监视任务，再注销最新服务记录。
+- 通过健康接口公开当前地址、刷新次数、失败次数和监视任务状态。
 - 保持macOS和Windows一致行为。
 
 ## 6. Device Manager与Session
@@ -352,7 +355,7 @@ SQLite建议实体：
 
 ## 14. 设备传输策略
 
-当前固件2.0.15的主语音协议由认证、可逆的Profile配置二选一：
+当前固件2.0.16的主语音协议由认证、可逆的Profile配置二选一：
 
 ```text
 MQTT profile: MQTT JSON控制与语音信令 + 加密UDP Opus

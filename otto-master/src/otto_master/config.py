@@ -100,6 +100,7 @@ class DiscoveryConfig:
     enabled: bool
     hostname: str
     service_type: str
+    refresh_interval_seconds: float
 
 
 @dataclass(frozen=True, slots=True)
@@ -644,6 +645,12 @@ def load_config(
             enabled=_bool(discovery, "enabled", "discovery"),
             hostname=_string(discovery, "hostname", "discovery"),
             service_type=_string(discovery, "service_type", "discovery"),
+            refresh_interval_seconds=_float(
+                discovery,
+                "refresh_interval_seconds",
+                "discovery",
+                minimum=1.0,
+            ),
         ),
         database=DatabaseConfig(
             path=_string(database, "path", "database"),

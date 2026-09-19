@@ -293,3 +293,18 @@
 - 静默门禁：独立会话中设备继续产生9次VAD-only事件，WakeGate仍在开放监听后约8秒以`idle_timeout`退出；最终EVA1 waiting/idle，活动ASR与UDP session均为0。EVA2虽重新在线但本轮未向其下发语音或动作命令。
 - 用户验收：在上述修复后的EVA1链路上，用户确认“对话感觉没问题了”；当前对话流畅度、设备音量100与服务端2.0倍TTS听感由待确认改为主观PASS，未将该结论外推到动作贴图或EVA2。
 - 自动验证：锁文件、Ruff、mypy strict（38个源码文件）、Node语法、`git diff --check`和全量183项pytest通过。`b4a694b`的run `35400612369`在Windows暴露10 ms笑声重试测试时限；`1c10865`的run `35403162431`又暴露waiting后异步close断言抢跑。前者改为0.1/1秒，后者显式等待会话关闭事实，生产配置和状态机均未放宽；本地30轮Windows敏感用例通过。收口提交`51a1b48`对应run `35403562279`的macOS/Windows Tests、原生Opus加载和打包smoke全部PASS。
+
+### 2026-09-19 / test1.0 / 同名Wi-Fi换网与mDNS自动刷新
+
+- 现场：开发机从`192.168.172.225`切到`192.168.122.225`，EVA1/EVA2已分别取得新网段`.127/.117`且可达，但旧Runtime继续广播旧地址。EVA2在Server重启修正记录后自动MQTT回连；EVA1可ping、可通过8765显式mDNS hello上报当前名字/IP，却没有正式MQTT连接。
+- 双层根因：Server `MdnsGateway`只在进程构造时获取一次IPv4；设备`OttoMasterLink`虽每次重试都显式查mDNS，正式`MqttProtocol`却没有复用结果，而是把`.local`名称继续交给ESP MQTT/路由器DNS。
+- Server修复：新增5秒地址监视、Zeroconf原位更新、切换瞬间回环保护、更新失败保留旧记录/自动重试；关闭先停止监视再注销最新记录。健康接口和WebUI组件状态可见当前地址、刷新次数、失败次数与监视任务。
+- 固件修复：2.0.16在正式MQTT首次连接和每次重连前调用显式mDNS解析，只把当次IPv4交给Client，不写NVS。ESP-IDF 5.5.5完整构建3,831,136字节镜像，SHA256 `03377107cb829ce741dd5239d6d87c0d207b0f8a889532c45b953d9ae44ba9a1`。
+- 真机：EVA1经本地升级链OTA到2.0.16后，无需固定IP或重新配网，以`192.168.122.127`发出正式MQTT hello并持续heartbeat；EVA2随后经串口完整烧录升级到2.0.16，保留Wi-Fi/名称/凭据并以`.117`上线，屏幕确认`EVA2/2.0.16`。设备首选transport与Server凭据幂等核对均正常，密钥未输出或写入文档。
+- 重启与动作门禁：Runtime重启后EVA1约0.37秒、当时仍为2.0.9的EVA2约9.79秒自动hello，机器人均未重启或重配。受保护verify全项通过后，正式批量API只向EVA1提交一步walk；命令`df274527-df9e-4e40-b1b3-23ccaf6b790c`完整经过requested/published/accepted/moving/completed，5.238秒完成，最终EVA1 idle、sound false、显示恢复base_emotion，EVA2未被选中。
+- EVA2扩展：首次OTA下载和`upgrade_started`不能证明切换，重启探针仍为2.0.9后改用串口烧录；2.0.16应用SHA256为`b8d4e7323b5a0d4d3486373bb9c2a0a0fd345a1d4bf9bc88565595d387b1cc1a`。verify 98.511 ms通过，按钮会话`faa4eea4-b809-4e34-b835-0b221fcbbd5c`完成笑声、转写、奶龙回复/TTS和再次监听；该单会话不替代并发语音验收。
+- EVA3扩展：串口MAC复核为`288485478f34`，2.0.16应用SHA256为`50f159e5646f47045027b94878527a728e2fab03b0333761710a0a46472652a8`。USB重枚举使写入工具末尾返回非零码，随后以资源校验、完整启动、屏幕`EVA3/2.0.16`、`.59` hello和正式verify 171.521 ms共同确认成功；受保护发放只命中EVA3，临时密钥文件已删除。
+- 阵列门禁：EVA1/EVA2 batch `array-eva1-eva2-20260919-01`请求2、接受2、失败0。三机batch `array-eva1-eva2-eva3-20260919-01`请求3、接受3、失败0；命令`c0ea38d2-18ca-4935-95c7-fd96b75e3875`、`aa933b9f-1565-421a-ac94-e1d84d89777d`、`1856da68-5a84-428a-b71d-50d4b252108c`分别在5.222、6.229、6.221秒completed，最终三台online/idle，Gateway无拒绝/发布失败。
+- 固件Git：2.0.16源码已推送`howtion0/otto codex/otto-portable@c4ad28e45adb5f565469d4c14b52aedcb74c1ffb`，本地与远端SHA一致。
+- 自动验证：全量187项pytest、Ruff、mypy strict（38个源码文件）、Node语法、锁文件和差异检查通过；Server测试覆盖地址变化、回环保护及失败后恢复，固件完整构建通过。当前Runtime广播`192.168.122.225`且监视健康。
+- 待完成：精确提交并push Server mDNS修复与文档，核验macOS/Windows CI；多设备并发语音/工具、WebSocket真机和实体Windows留到下一轮。

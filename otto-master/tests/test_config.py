@@ -32,7 +32,7 @@ def test_repository_config_loads_without_exposing_secret_values() -> None:
     assert config.cloud.tts.speaker == "zh_female_wanqudashu_moon_bigtts"
     assert config.cloud.tts.resource_id == "volc.service_type.10029"
     assert config.audio.tts_pcm_gain == 2.0
-    assert config.ota.firmware_version == "2.0.15"
+    assert config.ota.firmware_version == "2.0.16"
     assert config.mqtt.enabled is True
     assert config.mqtt.port == 1883
     assert config.mqtt.heartbeat_stale_seconds == 15
@@ -42,6 +42,7 @@ def test_repository_config_loads_without_exposing_secret_values() -> None:
     assert config.dispatch.ack_timeout_seconds == 3
     assert config.dispatch.completion_timeout_seconds == 30
     assert config.dispatch.state_query_interval_seconds == 1
+    assert config.discovery.refresh_interval_seconds == 5
     assert config.tcp.enabled is False
     assert config.tcp.port == 8765
     assert config.tcp.max_frame_bytes == 65536
@@ -132,4 +133,21 @@ def test_max_utterance_requires_endpoint_and_cloud_timeout_margin(
     )
 
     with pytest.raises(ConfigError, match="wake.max_utterance_seconds"):
+        load_config(target)
+
+
+def test_mdns_refresh_interval_must_be_at_least_one_second(tmp_path: Path) -> None:
+    source = Path(__file__).parents[1] / "config.yaml"
+    target = tmp_path / "config.yaml"
+    contents = source.read_text(encoding="utf-8")
+    target.write_text(
+        contents.replace(
+            "  refresh_interval_seconds: 5",
+            "  refresh_interval_seconds: 0.5",
+            1,
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ConfigError, match="discovery.refresh_interval_seconds"):
         load_config(target)

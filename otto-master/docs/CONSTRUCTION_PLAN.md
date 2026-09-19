@@ -142,7 +142,7 @@ M4  可交付门禁
 2. 设备、事件、命令和配置API骨架。
 3. Web状态推送。
 4. OTA manifest与固件下载。
-5. `zeroconf`发布 `master.local`。
+5. `zeroconf`发布 `master.local`，并周期监视本机IPv4；Wi-Fi/网段变化时原位更新记录，短暂回环地址或更新失败不覆盖最后一个有效LAN记录。
 6. 在同一Python进程启动和关闭MQTT 3.1.1 Broker。
 7. OTA按MAC下发 `master.local:1883`、独立client_id、凭据和每设备Topic。
 8. Broker健康状态、匿名访问关闭和最小Topic ACL。
@@ -156,6 +156,7 @@ M4  可交付门禁
 - [x] macOS和Windows地址行为一致
 - [x] 固件不存在时明确返回404
 - [x] mDNS注册和注销均可观测
+- [x] mDNS在Server换网后自动更新地址，刷新任务、次数和失败可从健康接口观测
 - [x] 无需另装Broker即可在macOS和Windows启动MQTT服务
 - [x] 匿名MQTT连接被拒绝，设备不能订阅其他MAC的down Topic
 - [x] OTA返回 `otto/v1/devices/{device_id}/up|down`，不返回固定IP
@@ -263,8 +264,9 @@ Provider和协议已经通过独立烟测冻结；`test0.9`又完成EVA1的MQTT+
 7. ASR使用相互独立的“非空partial稳定1.2秒”“已观测说话后VAD连续静音1.2秒”和“utterance开始后12秒硬上限”三个端点，任一获胜后排空尾帧并结束云输入；清理先原子摘除活动utterance。首次空final只触发一次本地大笑并重开监听，连续第二次空final正常退出，不调用LLM或卡在recognizing。Dispatcher等待舵机idle和本地sound非busy后才完成动作。
 8. EVA固件2.0.15用21个看山对话表情和22个动作贴图替换中央旧大眼区域，保留顶部状态栏和底部聊天文字；动作结束/stop恢复最近基础表情。设备音量一次性迁移到100，动作任务优先级低于音频任务；正式对话控制先返回关联ACK，再异步切换音频通道。
 9. 真机默认三步`swing`可略超15秒；生产动作完成时限提高到30秒，仍保留超时自动stop。ACK时限不变，避免用放宽设备接收门限掩盖断线。
+10. 固件2.0.16把既有显式mDNS解析器接入正式MQTT：首次连接和每次重连都重新解析`master.local`，当次IPv4不写NVS；连接成功后hello/heartbeat继续按MAC、名字和当前DHCP IP更新Server动态表。
 
-当前状态（2026-09-19）：本地锁文件、Ruff、mypy strict、183项pytest、Node语法和差异检查通过；2.0.15镜像完整构建并OTA到EVA1，hello/心跳确认版本2.0.15与音量100，Server确认TTS增益2.0。EVA1已完成五轮有效流式问答、语音前进工具、按钮退出、连续空final熔断和VAD噪声下精确8秒静默退出；ASR/TTS无失败，最终WakeGate waiting、活动ASR/UDP均为0。用户随后确认“对话感觉没问题了”，因此EVA1当前对话流畅度、音量和TTS听感记为主观PASS。WebUI真实前进/转向/太空步和动作音效排空也已有真机证据。EVA2本次对话验收未使用，真实双机语音不冒充通过。详细记录见`docs/sessions/20260919-multidevice-webui-test1.0.md`。
+当前状态（2026-09-19）：本地锁文件、Ruff、mypy strict、187项pytest、Node语法和差异检查通过；Server新增mDNS地址监视与原位更新，固件2.0.16把显式mDNS接入正式MQTT，完整构建并推送`c4ad28e`。EVA1无需固定IP或重新配网即在新网段自动回连；EVA2/EVA3随后完整烧录2.0.16并分别以正确屏显名称、稳定MAC和独立MQTT身份上线。正式三机batch请求3、接受3、失败0，三条walk均走完requested/published/accepted/moving/completed并回online/idle；EVA2另完成一次按钮触发的MQTT+UDP问答烟测。换网前EVA1五轮问答及用户对话/TTS主观PASS继续有效；EVA2单会话和三机控制都不冒充多设备并发语音通过。详细记录见`docs/sessions/20260919-multidevice-webui-test1.0.md`和`docs/sessions/20260919-mdns-roaming-test1.0.md`。
 
 纵向 MVP 的硬门禁是“大笑真实结束后才能开始听”。若没有完整的 `sound.busy true→false` 证据，本轮必须失败关闭，ASR 与 LLM 调用数必须为零。
 
@@ -380,4 +382,4 @@ Provider和协议已经通过独立烟测冻结；`test0.9`又完成EVA1的MQTT+
 11. 重启MQTT Broker后两台设备恢复连接和状态查询
 ```
 
-Phase 4真机步骤、Topic和JSON以 `docs/MQTT_CONTROL_CONTRACT.md` 为准。固件`2.0.5`的TCP测试只保留为历史行为基线；MQTT控制已在两台`2.0.6`真机通过，EVA1随后完成2.0.11语音/工具纵向链并升级到2.0.15看山/音量/正式对话控制版本。EVA2当前以`2.0.9`重新在线，但本次对话修复未触碰；历史结果或在线状态都不能替代下一轮双机并发验收。
+Phase 4真机步骤、Topic和JSON以 `docs/MQTT_CONTROL_CONTRACT.md` 为准。固件`2.0.5`的TCP测试只保留为历史行为基线；MQTT控制先在两台`2.0.6`真机通过，EVA1随后完成2.0.11语音/工具纵向链、2.0.15看山/音量/正式对话控制以及2.0.16 MQTT显式mDNS重连。当前EVA1/EVA2/EVA3均运行2.0.16，三机正式同批动作已完成；EVA2单会话问答成功仍不能替代下一轮多设备并发语音/工具验收。

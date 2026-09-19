@@ -1,6 +1,6 @@
 # Module Status
 
-当前已完成Phase 1-4的软件基座和Phase 4E双机控制门禁；`test0.9`完成EVA1的火山ASR/TTS、DeepSeek文本/工具流、MQTT UDP音频和循环WakeGate纵向链，`test1.0`新增多设备WebUI、对话投影、快捷/批量控制、正式对话控制、ASR三端点与清理加固、空识别熔断、动作音效排空判据、TTS增益与固件看山表情。当前本地183个测试及GitHub run `35403562279`的macOS/Windows矩阵通过，EVA1五轮真实问答、语音动作、按钮退出、8秒静默退出及用户对话/TTS听感已验收；动作图、第二台语音工具隔离、WebSocket真机与Windows实体部署仍未完成。
+当前已完成Phase 1-4的软件基座和Phase 4E双机控制门禁；`test0.9`完成EVA1的火山ASR/TTS、DeepSeek文本/工具流、MQTT UDP音频和循环WakeGate纵向链，`test1.0`新增多设备WebUI、对话投影、快捷/批量控制、正式对话控制、ASR三端点与清理加固、空识别熔断、动作音效排空判据、TTS增益、固件看山表情和mDNS换网自动刷新。当前本地187个测试通过；上一代码检查点GitHub run `35403562279`的macOS/Windows矩阵通过，本轮mDNS提交的跨平台CI待push后核验。EVA1/EVA2/EVA3均运行2.0.16，以独立身份在新网段MQTT在线，三机同批动作已通过；EVA1完整问答与EVA2单会话烟测已完成。动作图目视、多设备并发语音工具隔离、WebSocket真机与Windows实体部署仍未完成。
 
 | 模块 | 文件 | 状态 |
 |---|---|---|
@@ -19,7 +19,7 @@
 | Legacy Device TCP Gateway | `gateways/device_tcp.py` | Phase 4D已实现认证的`otto-master/1`换行JSON、替换连接与命令生命周期 |
 | Web/REST/OTA Gateway | `gateways/web.py` | 已实现控制面、设备/事件读取、验证、命令API、TCP/WS受保护发放、显式多设备批量动作/stop及脱敏对话投影 |
 | Cloud Gateway | `gateways/cloud.py` | 已实现火山ASR二进制WS、火山TTS流式HTTP、DeepSeek文本/工具SSE与稳定错误映射 |
-| mDNS Gateway | `gateways/mdns.py` | Phase 3已实现并通过本机注册/解析/注销smoke |
+| mDNS Gateway | `gateways/mdns.py` | 已实现注册/解析/注销，并以可配置周期监视IPv4、原位更新服务、保留最后有效LAN记录及公开刷新健康状态 |
 | Device Manager | `devices/manager.py` | Phase 4A+4D已实现设备去重、每传输快照、固定优先级选择、故障隔离与降级 |
 | Device Session | `devices/session.py` | Phase 4A+4D已实现身份、每传输在线/心跳/Profile及首选传输快照隔离；当前快照包含本地音效、显示别名和输出音量 |
 | Device States | `devices/states.py` | Phase 4A已实现连接与动作状态枚举/迁移规则 |
@@ -39,7 +39,7 @@
 | WebUI CSS | `web/style.css` | 已实现多设备控制与对话卡片的离线响应式样式 |
 | Message Bus tests | `tests/test_message_bus.py` | Phase 1已实现 |
 | Message contract tests | `tests/test_messages.py` | Phase 1已实现 |
-| Config tests | `tests/test_config.py` | 覆盖既有配置、TTS增益范围/非有限值拒绝及12秒端点与云超时余量 |
+| Config tests | `tests/test_config.py` | 覆盖既有配置、TTS增益范围/非有限值拒绝、12秒端点与云超时余量及mDNS刷新周期下限 |
 | Runtime tests | `tests/test_runtime.py` | 覆盖三Gateway、Broker、语音组件装配、动作/stop、隔离与端口闭环 |
 | Storage tests | `tests/test_storage.py` | Phase 2+4A+4C已实现 |
 | Command repository tests | `tests/test_command_repository.py` | Phase 4C已实现幂等、转移、历史与重启恢复 |
@@ -51,7 +51,7 @@
 | Device WebSocket tests | `tests/test_device_ws.py` | 覆盖真实Runtime握手、音频引用、VAD/goodbye、三传输隔离、动作/stop与资源释放 |
 | Device Manager tests | `tests/test_device_manager.py` | Phase 4A+4D已实现会话去重、每传输隔离、优先级切换、超时和重启恢复 |
 | Device Verifier tests | `tests/test_device_verifier.py` | Phase 4B+4D已实现关联、错误目标/ID/transport、超时与关闭中断 |
-| mDNS tests | `tests/test_mdns.py` | Phase 3已实现 |
+| mDNS tests | `tests/test_mdns.py` | 覆盖注册/注销、自动地址更新、瞬时回环保护、更新失败保留旧记录与后续重试恢复 |
 | Cloud/Opus/ASR/LLM/TTS tests | `tests/test_cloud.py`等 | 覆盖文本/工具流协议、完整句后工具顺序、严格JSON、PCM增益/跨块采样、编解码、三端点并发、VAD抖动、硬上限、背压、截断、原子取消和失败清理 |
 | Robot Tool tests | `tests/test_robot_tools.py` | 5项覆盖目录收窄、目标锁定、完成、参数拒绝、失败/取消安全stop |
 | WakeGate tests | `tests/test_wake_gate.py` | 覆盖笑声顺序/跨平台查询重试、循环、上屏、VAD-only不续时、非空partial取消计时、连续空final熔断、8秒静默、TTS后串行工具、失败、笑声复用和新session恢复 |
@@ -61,10 +61,11 @@
 
 | 项目 | 状态 |
 |---|---|
-| EVA固件 | `2.0.15`已用ESP-IDF 5.5.5完整构建；应用镜像3,830,880字节，SHA256 `e1ca9051c8f6a2aac1bef3e47323c1927ef6bebc3b901ae52bc393f9ad4595e6`；源码已推送`codex/otto-portable@c6addc6a35bf54c6c28f07fde53828cd73bce1f0` |
-| EVA1 | `e072a1f71184`，MQTT online，固件2.0.15、输出音量100；五轮真实流式问答、语音前进工具、空识别熔断、按钮退出及VAD噪声下8秒静默退出均通过，最终waiting/idle且活动ASR/UDP为0；用户确认当前对话、音量和TTS听感无问题，仍需动作图目视确认 |
-| EVA2 | `aca704ed89a8`，固件2.0.9，当前重新在线；本次对话修复未向其下发动作或启动语音，双机语音验收仍未做 |
-| 双机隔离 | EVA1与EVA2分别动作时另一台保持idle；身份、凭据与精确topic按MAC隔离 |
+| EVA固件 | `2.0.16`已用ESP-IDF 5.5.5完整构建；应用镜像3,831,136字节，SHA256 `03377107cb829ce741dd5239d6d87c0d207b0f8a889532c45b953d9ae44ba9a1`；正式MQTT显式mDNS重连源码已推送`codex/otto-portable@c4ad28e45adb5f565469d4c14b52aedcb74c1ffb` |
+| EVA1 | `e072a1f71184`，`192.168.122.127`、MQTT online、固件2.0.16；无需写死IP或重新配网即自动hello，单机换网walk 5.238秒完成；三机批次命令`c0ea38d2-18ca-4935-95c7-fd96b75e3875`在5.222秒完成 |
+| EVA2 | `aca704ed89a8`，`192.168.122.117`、MQTT online、固件2.0.16；串口完整烧录后屏显名称正确、15个动作，单会话MQTT+UDP ASR/LLM/TTS成功；三机批次命令`aa933b9f-1565-421a-ac94-e1d84d89777d`在6.229秒完成 |
+| EVA3 | `288485478f34`，`192.168.122.59`、MQTT online、固件2.0.16；屏显`EVA3/2.0.16`，受保护发放独立凭据/Topic，15个动作；三机批次命令`1856da68-5a84-428a-b71d-50d4b252108c`在6.221秒完成 |
+| 三机隔离 | batch `array-eva1-eva2-eva3-20260919-01`请求3、接受3、失败0；三条命令均独立走完requested/published/accepted/moving/completed，最终三台online/idle且无Gateway reject/publish failure |
 | 本地音效 | 奶龙笑声约2.0065秒、24 kHz OpusHead/34个60 ms包；EVA1连续两轮观测`moving/laugh/busy=true → idle/false`，不再产生15秒Dispatcher悬挂 |
-| 安全与恢复 | 无`current_token`改配被拒绝；相同命令ID仅重放缓存ACK；Server/Broker重启后双机重新hello、verify与WebUI恢复 |
-| 未完成 | EVA1看山动作图切换/恢复目视确认、EVA2语音工具隔离、WebSocket真机Profile及实体Windows局域网 |
+| 安全与恢复 | 无`current_token`改配被拒绝；相同命令ID仅重放缓存ACK；Server/Broker重启后设备重新hello、verify与WebUI恢复；EVA3发放只命中目标MAC且临时密钥文件已删除 |
+| 未完成 | EVA1看山动作图切换/恢复目视确认、多设备并发语音/工具隔离、WebSocket真机Profile及实体Windows局域网 |

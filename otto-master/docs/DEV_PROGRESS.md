@@ -15,10 +15,12 @@
 - Phase 4B最终支线 `test0.5` 已推送，远程哈希为 `8120d6341fc80d35f3ecf68e2320559c10a5604f`；首轮run `35304119667` Windows发生一次性Tests失败，相同正式SHA复验run `35304376265`的macOS/Windows jobs均PASS。
 - Phase 4C最终支线 `test0.6` 已推送，远程哈希为 `f359a1fc3a50360fbcb2de42cced2f48eeb6c164`；探针run `35306214077`和正式run `35306518034`的macOS/Windows jobs均PASS。
 - Phase 4D最终支线 `test0.7` 已推送，远程哈希为 `2b22a724d7169c2f84c5e028b95f40de7c0c4964`；正式run `35309478483`的macOS/Windows jobs均PASS。
-- Phase 4E真机支线为 `test0.8`，从已验收的 `test0.7` 继续；两台EVA控制、锁定改配拒绝、重复ID和Server/Broker重启恢复均已通过，正式CI待提交后运行。
+- Phase 4E真机支线为 `test0.8`，从已验收的 `test0.7` 继续；两台EVA控制、锁定改配拒绝、重复ID和Server/Broker重启恢复均已通过，后续已被`test0.9/test1.0`的正式CI覆盖。
 - Phase 5纵向MVP支线`test0.9`已推送，远程哈希为`a2c22fb144beece1676625c39deee2b7d223d9df`；GitHub Actions run `35384613680`的macOS/Windows jobs均PASS。
 - 当前工作支线为`test1.0`，从上述已验收基线继续，包含多设备WebUI、对话/工具加固、TTS音量和看山表情。首个提交`b4a694b1c5b6bf39bdb4cb4288b42cfc27268876`的run `35400612369`暴露Windows测试时限；对话修复提交`1c10865b96bf87c70732d5e7000db09357d3b6dc`的run `35403162431`又暴露测试异步close断言抢跑。两处测试同步修复收口于`51a1b48142b3193d9e0a10545d19f0b61c1a21f6`，最终run `35403562279`的macOS/Windows Tests、原生Opus加载与打包smoke全部PASS。
+- 同一支线继续处理同名Wi-Fi换网故障：Server从`192.168.172.225`切到`192.168.122.225`后，旧mDNS实现仍广播启动时地址；固件本地8765链虽显式查询mDNS，正式MQTT此前却仍把`.local`交给底层DNS。Server现已加入5秒IPv4监视、原位更新、瞬时回环保护和失败重试；EVA固件2.0.16让正式MQTT首次连接/每次重连复用显式解析。本地门禁、EVA1换网回连、EVA2/EVA3升级和三机同批动作均通过，当前只待Server提交与新CI收口。
 - 配套EVA固件2.0.15源码已推送到`howtion0/otto`的`codex/otto-portable`，远端SHA为`c6addc6a35bf54c6c28f07fde53828cd73bce1f0`；2.0.11恢复点仍为`abb769f1d0f3d1c03fb7a6106bd7288f31c66a98`。
+- EVA固件2.0.16已完整构建、OTA到EVA1并推送`howtion0/otto`的`codex/otto-portable@c4ad28e45adb5f565469d4c14b52aedcb74c1ffb`；随后EVA2和EVA3分别以保底名称完整串口烧录并核对屏显/稳定MAC。EVA2/EVA3应用SHA256分别为`b8d4e7323b5a0d4d3486373bb9c2a0a0fd345a1d4bf9bc88565595d387b1cc1a`和`50f159e5646f47045027b94878527a728e2fab03b0333761710a0a46472652a8`；源码仍是同一远端SHA，2.0.15的`c6addc6`继续作为回滚点。
 - 此后每个阶段或补充检查点使用下一个 `testN.N` 编号。
 - 支线编号与产品版本分别记录，互不驱动。
 
@@ -29,16 +31,16 @@
 | Phase 0 文档脚手架 | 已完成 |
 | Phase 1 Runtime与Message Bus | 已完成 |
 | Phase 2 SQLite | 已完成 |
-| Phase 3 Web/OTA/mDNS/Embedded MQTT Broker | 已完成 |
-| Phase 4 MQTT控制/TCP回退/WebSocket兼容 | 进行中；Phase 4A-4D软件门禁完成，Phase 4E两台EVA的2.0.6 OTA、MQTT控制、锁定改配、重复ID及Server/Broker重启恢复已通过；当前`test1.0`跨平台CI通过，WebSocket真机Profile仍待验收 |
-| Phase 5 Opus/ASR/TTS | 进行中；火山ASR/TTS、Opus、MQTT加密UDP、独立partial/VAD/12秒硬上限三端点、2.0倍饱和增益和EVA1真实闭环已实现，EVA2、WebSocket真机与Windows实体矩阵未完成 |
+| Phase 3 Web/OTA/mDNS/Embedded MQTT Broker | 已完成；`test1.0`补充换网自动刷新加固，本地门禁通过 |
+| Phase 4 MQTT控制/TCP回退/WebSocket兼容 | 进行中；Phase 4A-4D软件门禁、Phase 4E双机基线和`test1.0`三台2.0.16正式MQTT批量控制均通过；上一`test1.0`检查点跨平台CI通过，本轮mDNS提交CI待核验，WebSocket真机Profile仍待验收 |
+| Phase 5 Opus/ASR/TTS | 进行中；火山ASR/TTS、Opus、MQTT加密UDP、独立partial/VAD/12秒硬上限三端点、2.0倍饱和增益和EVA1真实闭环已实现，EVA2单会话烟测成功；多设备并发语音、WebSocket真机与Windows实体矩阵未完成 |
 | Phase 6 WakeGate | 进行中；每轮2秒笑声门禁、循环问答、首次空final笑声恢复/连续第二次退出、仅非空partial取消的8秒静默、按钮/正式Web控制进出、瞬时状态查询重试和失败自恢复已实现 |
 | Phase 7 LLM/Dispatcher/动作 | 部分完成；DeepSeek流式`tools/tool_calls`、当前语音设备Schema、参数校验、TTS后串行工具和Dispatcher桥已实现；动作完成会等待本地音效排空，持久设备组与双机语音工具隔离未完成 |
 | Phase 8 集群/日志/容错 | 部分完成；WebUI多选、快捷/高级批量动作、stop、正式对话start/stop、逐设备结果和脱敏对话投影已实现，长期运行与完整集群策略未完成 |
 | Phase 9 Windows打包 | 未开始 |
 | Python业务实现 | Phase 1-4基座及Cloud/ASR/LLM/TTS、RobotToolBridge、DeviceAudioRouter、MQTT UDP、循环WakeGate和多设备Web控制台纵向链已实现 |
-| 自动测试 | 183通过；Ruff、mypy strict（38个源码文件）、Node语法、锁文件和diff检查通过；两次Windows测试等待边界已加固，最终run `35403562279`的macOS/Windows及打包smoke全部PASS |
-| 硬件验证 | EVA1运行2.0.15，MQTT在线，输出音量100；五轮真实问答、语音前进工具、首次/连续空final策略、按钮退出及VAD噪声下8秒静默退出通过。用户确认当前“对话感觉没问题了”，2.0倍TTS、音量与流畅度主观PASS；EVA2当前在线但本次未触碰，实体Windows仍属于后续门禁 |
+| 自动测试 | 187通过；Ruff、mypy strict（38个源码文件）、Node语法、锁文件和diff检查通过；上一代码检查点run `35403562279`的macOS/Windows及打包smoke全部PASS，本轮mDNS CI待push |
+| 硬件验证 | EVA1/EVA2/EVA3均运行2.0.16并分别以`.127/.117/.59`通过`master.local`正式MQTT在线；三机batch请求3、接受3、失败0，分别在5.222/6.229/6.221秒完成并回idle。EVA2另完成单会话MQTT+UDP问答烟测；实体Windows与多设备并发语音仍待门禁 |
 
 ## 已完成
 
@@ -104,6 +106,7 @@
 - `test0.9`最终门禁为`144 passed`；Ruff、mypy strict（37个源码文件）和锁文件检查均通过。固件由ESP-IDF 5.5.5构建，2.0.11应用镜像3,788,720字节，SHA256 `4c4298363b621599ea11c8daba2dc3efbc644538666a9f10f7115ece49e200bf`。
 - `test1.0`新增WebUI设备多选、动作交集、批量动作/stop、逐设备独立结果和Server对话泳道；`GET /api/v1/conversations`在刷新后恢复每设备状态、转写、回答、工具和错误，旧session与敏感/音频字段不能污染投影。
 - TTS Service在Opus编码前对24 kHz S16LE PCM应用可配置饱和增益，当前生产配置为2.0；EVA1设备输出音量已从90提升并持久化为100。最终2.0.15镜像由ESP-IDF 5.5.5完整构建，大小3,830,880字节、SHA256 `e1ca9051c8f6a2aac1bef3e47323c1927ef6bebc3b901ae52bc393f9ad4595e6`，OTA回连已报告版本2.0.15与音量100。
+- 固件2.0.16把既有手写mDNS解析器从仅供8765验证链复用到正式MQTT；NVS仍只保存`mqtt://master.local:1883`，每次连接拿到的IPv4只存在于当次Client。ESP-IDF 5.5.5完整构建镜像3,831,136字节，SHA256 `03377107cb829ce741dd5239d6d87c0d207b0f8a889532c45b953d9ae44ba9a1`；EVA1 OTA后以2.0.16、当前DHCP IP和MQTT hello自动回连。
 - 固件把中央旧大眼GIF替换为21个看山对话表情，并为实际动作增加22个贴图描述符；顶部状态栏和底部用户/助手文字控件保持原路径。动作开始覆盖中央图，结束或stop恢复最近基础表情；用户目视验收仍未回填。
 - `test1.0`正式对话控制已沿Message Bus/MQTT完成EVA1 start/stop关联ACK；固件先ACK再异步切换音频通道，避免UDP协商阻塞造成Server假超时。
 - 03:45左右的顺滑回合均在1.1至3.1秒获得火山partial；后续卡顿轮上传491帧且VAD正常但没有partial，旧逻辑因此等满30秒。ASR现使用相互独立的partial稳定、说话后VAD静音1.2秒和12秒硬上限端点，VAD抖动不能再续掉partial/硬上限；取消时原子摘除活动utterance。首次空final只笑一次并重开，连续第二次正常退出。
@@ -111,26 +114,29 @@
 - 用户在上述修复后真机链路上确认“对话感觉没问题了”，因此EVA1当前2.0倍TTS音量、可听性、卡顿和整体对话体验的主观验收记为PASS。
 - WebUI新增常用动作快捷按钮、显式目标与参数、动作目录自动verify和仅限loopback的无日志fragment授权引导。EVA1真实完成两次3步前进、一次左转和一次太空步；同设备重叠点击被Dispatcher正确串行。后续一次“点击前进无动作”经命令表和消息流确认根本没有进入正式8081；本机同时存在遗留8080入口且页面没有持久授权判别。现已关闭旧进程，并增加授权徽标、未授权控件锁定及常驻提交结果。
 - 修复后的8081页面再次真机操作已完成前进、抖动、弯腰和大笑，均沿`webui:batch`到达MQTT并completed；动作图遥测随动作切换并恢复。三步`swing`实际超过统一15秒完成时限而触发安全stop，生产完成门限已调整为30秒，ACK门限保持3秒。
-- 当前本地门禁为`183 passed`；锁文件、Ruff、mypy strict（38个源码文件）、Node语法和`git diff --check`通过。真实EVA1批量动作、对话start/stop、五轮问答、工具与退出清理通过。run `35400612369`与`35403162431`暴露的两个Windows测试同步边界均已修复且未放宽生产逻辑；最终run `35403562279`双平台及打包smoke全部PASS。
+- 当前本地门禁为`187 passed`；锁文件、Ruff、mypy strict（38个源码文件）、Node语法和`git diff --check`通过。新增mDNS测试覆盖自动地址更新、瞬时回环保护、失败保留旧记录及重试恢复。真实EVA1批量动作、对话start/stop、五轮问答、工具与退出清理在换网前通过；run `35400612369`与`35403162431`暴露的两个Windows测试同步边界均已修复且未放宽生产逻辑，上一代码检查点run `35403562279`双平台及打包smoke全部PASS。
+- EVA2完整串口升级到2.0.16后，正式verify和按钮触发的单会话笑声→ASR→DeepSeek/TTS→再次监听均成功；EVA3以正确名称、MAC和受保护独立MQTT身份接入。正式三机批次`array-eva1-eva2-eva3-20260919-01`请求3、接受3、失败0，所有命令均到completed且三台最终online/idle。
 
 ## 进行中
 
-- `test1.0`代码、自动门禁、EVA1 2.0.15 OTA、正式WebUI控制、客观音量遥测、修复后真机问答及用户对话/TTS听感确认已完成；仍需由用户确认动作贴图切换/恢复。
-- 完整Phase 5仍欠EVA2语音隔离、WebSocket真机Profile、Windows/PyInstaller Opus门禁。EVA2已重新在线但本次未触碰，不能把在线状态或fake并发结果写成双机真机通过。
+- `test1.0`代码、自动门禁、EVA1 2.0.15对话能力、正式WebUI控制、客观音量遥测、修复后真机问答及用户对话/TTS听感确认已完成；仍需由用户确认动作贴图切换/恢复。
+- Server mDNS换网自动刷新与固件2.0.16正式MQTT显式解析均已实现；三台设备在新网段以稳定MAC和动态IP在线，单机、双机和三机正式动作均completed/idle。当前只待Server提交、push与跨平台CI收口。
+- 完整Phase 5仍欠多设备并发语音/工具隔离、WebSocket真机Profile、Windows/PyInstaller Opus门禁。EVA2单会话成功不能冒充双机或三机并发语音通过。
 - 多设备WebUI已经具备显式目标和并发控制；持久设备组、普通广播策略和多设备同时语音真机仍是后续范围。
 
 ## 下一步
 
-先提交并推送本轮对话加固，确认macOS/Windows CI都通过；随后由用户确认EVA1的看山动作图切换/恢复。之后用当前在线但未触碰的EVA2补双设备语音/工具隔离，再补WebSocket真机Profile与实体Windows。
+提交并推送Server mDNS修复与文档，确认macOS/Windows CI后暂停；下一轮再由用户确认看山动作图，并补多设备并发语音/工具隔离、WebSocket真机Profile与实体Windows。
 
 ## 已知风险
 
 - Python Opus库在Windows打包时可能需要额外动态库收集，留到Phase 5和Phase 9验证。
-- 火山ASR/TTS适配器、音频背压和EVA1真机已验证；EVA2、WebSocket真机和Windows `libopus` 打包尚未验证。Provider字段仍须通过Gateway隔离，不能泄漏到领域合同。
+- 火山ASR/TTS适配器、音频背压、EVA1完整真机和EVA2单会话已验证；多设备并发语音、WebSocket真机和Windows `libopus` 打包尚未验证。Provider字段仍须通过Gateway隔离，不能泄漏到领域合同。
 - 当前账号的ASR 2.0资源请求返回403，Phase 5先使用已验证的ASR 1.0时长版；2.0开通前不得自动切换或把403误报为密钥整体失效。
 - DeepSeek真实tool schema和tool-call消费已实现，但当前只允许当前语音设备的单调用；工具轮即使有已朗读前置句也不保留普通文本历史，直到`ChatMessage`支持规范的assistant tool_calls与tool result结构。双设备语音隔离和长时间稳定性仍待验收。
 - 服务端2.0倍数字增益配合设备音量100可能对接近满幅的PCM产生饱和钳位；最终以用户听感为准，若有明显破音应改用压缩/限幅而不是继续提高硬增益。
-- 固件2.0.15已补齐循环按钮、VAD、笑声播放完成、动作生命周期、看山贴图、音量100迁移和正式对话控制先ACK后切换；当前控制消息仍保持QoS 0/non-retain。
+- 固件2.0.16继承循环按钮、VAD、笑声播放完成、动作生命周期、看山贴图、音量100迁移和正式对话控制先ACK后切换，并补上MQTT显式mDNS解析；当前控制消息仍保持QoS 0/non-retain。
 - Windows真实局域网mDNS、防火墙提示和完整应用打包仍留给Phase 9实体Windows环境；本轮Windows CI已覆盖aMQTT认证/ACL、Runtime网络集成和Broker PyInstaller可执行文件。
-- fake与两台真机的accepted/moving/completed、stop、设备隔离、锁定改配拒绝、重复ID及Server/Broker重启恢复均已通过。
+- Server mDNS地址监视解决换网后继续广播旧IP，固件2.0.16则避免正式MQTT依赖路由器DNS或旧`.local`缓存。完全空白的新Server仍不认识设备旧密码，必须迁移`.local-secrets/mqtt-credentials.json`或增加受认证配对流程；mDNS只负责定位，不替代身份认证。
+- fake、历史双机门禁和当前三机的accepted/moving/completed、设备隔离均已通过；锁定改配拒绝、重复ID及Server/Broker重启恢复已有双机真机证据。
 - TCP和设备WebSocket当前是无TLS的局域网兼容入口，不得直接暴露到互联网或不可信网络；生产化前需要TLS终止、证书校验和对应威胁模型。
