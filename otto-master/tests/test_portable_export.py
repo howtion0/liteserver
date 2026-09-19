@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import json
+import os
 import stat
 import subprocess
 import sys
@@ -80,7 +81,8 @@ def test_export_windows_secrets_keeps_code_archive_separate(tmp_path: Path) -> N
     assert 'OTTO_MQTT_MASTER_PASSWORD="master-test"' in text
     assert "OTTO_PROVISIONING_TOKEN=" in text
     assert restored["users"][1]["device_id"] == "aabbccddeeff"
-    assert stat.S_IMODE(output.stat().st_mode) == 0o600
+    if os.name == "posix":
+        assert stat.S_IMODE(output.stat().st_mode) == 0o600
 
     repeated = subprocess.run(
         [
