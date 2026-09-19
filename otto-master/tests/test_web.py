@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import re
 import socket
 from dataclasses import replace
 from datetime import UTC, datetime
@@ -15,6 +16,7 @@ from otto_master.config import RuntimeSecrets, load_config
 from otto_master.dispatch.commands import DispatchRequestError
 from otto_master.gateways.mqtt_broker import EmbeddedMqttBroker
 from otto_master.gateways.web import EventHub, WebContext, create_app
+from otto_master.gateways.zhihu import ZhihuGatewayError
 from otto_master.message_bus import MessageBus
 from otto_master.messages import Message, MessageKind
 from otto_master.services.conversation_control import ConversationControlError
@@ -135,6 +137,78 @@ class FakeConversationControl:
             self.active -= 1
 
 
+class FakeZhihuService:
+    def __init__(self) -> None:
+        self.saved_persona: dict[str, str] | None = None
+        self.queries: list[tuple[str, dict[str, Any]]] = []
+
+    def status(self) -> dict[str, Any]:
+        return {
+            "enabled": True,
+            "healthy": True,
+            "state": "running",
+            "configured": True,
+        }
+
+    def tools(self) -> dict[str, Any]:
+        return {"items": [{"name": "hot", "title": "知乎热榜"}], "read_only": True}
+
+    async def persona(self) -> dict[str, str]:
+        return self.saved_persona or {
+            "name": "奶龙",
+            "persona": "活泼",
+            "memory": "",
+            "interests": "机器人",
+        }
+
+    async def save_persona(self, values: dict[str, str]) -> dict[str, str]:
+        self.saved_persona = dict(values)
+        return dict(values)
+
+    async def probe(self) -> dict[str, Any]:
+        return {"verified": True, "capabilities": [{"id": "hot_list"}]}
+
+    async def query(self, tool: str, arguments: dict[str, Any]) -> dict[str, Any]:
+        self.queries.append((tool, arguments))
+        if tool == "fail":
+            raise ZhihuGatewayError(
+                "provider_30001",
+                "知乎请求失败：频率或额度限制（30001）",
+                status_code=429,
+            )
+        return {
+            "tool": tool,
+            "title": "知乎热榜",
+            "data": {"items": []},
+            "source": "知乎官方 API",
+        }
+
+    async def events(self, *, after: int = 0, limit: int = 64) -> dict[str, Any]:
+        return {"items": [], "cursor": after, "limit": limit}
+
+
+class FakeNarrator:
+    def __init__(self) -> None:
+        self.calls: list[dict[str, Any]] = []
+
+    async def narrate(
+        self,
+        device_id: str,
+        text: str,
+        *,
+        correlation_id: str | None = None,
+    ) -> dict[str, Any]:
+        self.calls.append(
+            {"device_id": device_id, "text": text, "correlation_id": correlation_id}
+        )
+        return {
+            "playback_id": "playback-1",
+            "device_id": device_id,
+            "sentence_count": 1,
+            "frame_count": 3,
+        }
+
+
 def _free_port() -> int:
     with socket.socket() as listener:
         listener.bind(("127.0.0.1", 0))
@@ -237,19 +311,24 @@ async def test_control_plane_static_health_ota_and_errors(tmp_path: Path) -> Non
         async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
             root = await client.get("/")
             assert root.status_code == 200
-            assert "Otto Master" in root.text
-            assert 'id="quick-action-grid"' in root.text
-            assert 'id="control-auth-badge"' in root.text
-            assert 'id="control-status"' in root.text
-            assert 'id="cluster-stop" class="danger" type="button" disabled' in root.text
-            assert 'data-quick-action="walk"' in root.text
-            app_js = await client.get("/assets/app.js")
+            assert "Forge 电台" in root.text
+            assert 'id="server-console"' in root.text
+            script_match = re.search(r'src="(/assets/[^"]+\.js)"', root.text)
+            style_match = re.search(r'href="(/assets/[^"]+\.css)"', root.text)
+            assert script_match is not None
+            assert style_match is not None
+            app_js = await client.get(script_match.group(1))
             assert app_js.status_code == 200
-            assert 'bootstrapLoopbackToken' in app_js.text
-            assert 'fragment.get("console_token")' in app_js.text
-            assert 'hasControlAuthorization' in app_js.text
-            assert '控制命令未发送' in app_js.text
-            assert "前进" in root.text and "后退" in root.text
+            app_css = await client.get(style_match.group(1))
+            assert app_css.status_code == 200
+            assert "console_token" in app_js.text
+            assert "/v1/zhihu/query" in app_js.text
+            assert "/v1/commands/actions/batch" in app_js.text
+            assert "/api/session" not in app_js.text
+            assert "/api/xiaozhi" not in app_js.text
+            assert (await client.get("/faces/neutral.gif")).status_code == 200
+            assert (await client.get("/models/body-clean.stl")).status_code == 200
+            assert (await client.get("/art/forge-retro-monitor.png")).status_code == 200
             assert "frame-ancestors 'none'" in root.headers["content-security-policy"]
 
             health = await client.get("/api/v1/health", headers={"X-Correlation-ID": "test-cid"})
@@ -379,6 +458,84 @@ async def test_device_read_apis_use_live_manager_snapshot(tmp_path: Path) -> Non
         }
         assert missing.status_code == 404
         assert missing.json()["error"]["code"] == "device_not_found"
+    finally:
+        await _close_context(context)
+
+
+async def test_zhihu_and_narration_apis_share_console_auth_and_stable_errors(
+    tmp_path: Path,
+) -> None:
+    context = await _context(
+        _config(tmp_path, host="0.0.0.0", console_token="console-secret")
+    )
+    zhihu = FakeZhihuService()
+    narrator = FakeNarrator()
+    context.zhihu = zhihu
+    context.narrator = narrator
+    app = create_app(context)
+    transport = httpx.ASGITransport(app=app)
+    auth = {
+        "Authorization": "Bearer console-secret",
+        "Origin": "http://testserver",
+    }
+    try:
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            blocked = await client.get("/api/v1/zhihu/status")
+            status = await client.get("/api/v1/zhihu/status", headers=auth)
+            tools = await client.get("/api/v1/zhihu/tools", headers=auth)
+            persona = await client.get("/api/v1/zhihu/persona", headers=auth)
+            saved = await client.put(
+                "/api/v1/zhihu/persona",
+                json={
+                    "name": "奶龙",
+                    "persona": "可爱",
+                    "memory": "",
+                    "interests": "机器人",
+                },
+                headers=auth,
+            )
+            probe = await client.post("/api/v1/zhihu/probe", headers=auth)
+            queried = await client.post(
+                "/api/v1/zhihu/query",
+                json={"tool": "hot", "arguments": {"limit": 1}},
+                headers=auth,
+            )
+            failed = await client.post(
+                "/api/v1/zhihu/query",
+                json={"tool": "fail", "arguments": {}},
+                headers=auth,
+            )
+            narration = await client.post(
+                "/api/v1/zhihu/narrate",
+                json={"device_id": "aabbccddee01", "text": "这是知乎热榜摘要。"},
+                headers={**auth, "X-Correlation-ID": "narration-correlation"},
+            )
+            arbitrary = await client.post(
+                "/api/v1/zhihu/query",
+                json={"tool": "hot", "arguments": {}, "access_secret": "must-not-pass"},
+                headers=auth,
+            )
+
+        assert blocked.status_code == 401
+        assert status.json()["configured"] is True
+        assert "secret" not in status.text.lower()
+        assert tools.json()["read_only"] is True
+        assert persona.json()["name"] == "奶龙"
+        assert saved.json()["persona"] == "可爱"
+        assert probe.json()["verified"] is True
+        assert queried.json()["source"] == "知乎官方 API"
+        assert zhihu.queries[0] == ("hot", {"limit": 1})
+        assert failed.status_code == 429
+        assert failed.json()["error"]["code"] == "zhihu_provider_30001"
+        assert narration.status_code == 200
+        assert narrator.calls == [
+            {
+                "device_id": "aabbccddee01",
+                "text": "这是知乎热榜摘要。",
+                "correlation_id": "narration-correlation",
+            }
+        ]
+        assert arbitrary.status_code == 422
     finally:
         await _close_context(context)
 

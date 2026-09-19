@@ -1,0 +1,2 @@
+# Vite bundles upstream Three.js GLSL template strings with significant source whitespace.
+otto-master/src/otto_master/web/assets/*.js -whitespace

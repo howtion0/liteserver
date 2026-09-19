@@ -135,6 +135,16 @@ cloud:
     resource_id: volc.service_type.10029
     speaker: zh_female_wanqudashu_moon_bigtts
 
+zhihu:
+  enabled: true
+  base_url: https://developer.zhihu.com
+  access_secret_env: ZHIHU_ACCESS_SECRET
+  request_timeout_seconds: 15
+  answer_timeout_seconds: 60
+  max_response_bytes: 2000000
+  max_concurrency: 2
+  event_history_size: 64
+
 ota:
   enabled: true
   firmware_path: firmware/xiaozhi.bin

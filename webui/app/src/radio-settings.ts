@@ -1,0 +1,22 @@
+import {api,hasConsoleAuthorization,setConsoleToken} from './radio-api';
+
+type Capability={id:string;name:string;components:string[];total:number|string;used:number|string;remaining:number|string;available:boolean;exhausted:boolean};
+type ZhihuStatus={configured:boolean;state:string;capabilities:Capability[];last_probe_at:number|null};
+
+function renderCapabilities(host:HTMLElement,items:Capability[]){
+ host.replaceChildren();
+ if(!items.length){const empty=document.createElement('p');empty.className='zhihu-capability-empty';empty.textContent='点击刷新能力后显示知乎开放平台权限与额度。';host.append(empty);return;}
+ for(const item of items){const card=document.createElement('article');card.className='zhihu-capability';const head=document.createElement('div');head.className='zhihu-capability-head';const name=document.createElement('strong');name.textContent=item.name;const state=document.createElement('span');state.className='zhihu-capability-state '+(item.available?(item.exhausted?'warn':'ok'):'off');state.textContent=item.available?(item.exhausted?'额度用完':'可用'):'未开放';head.append(name,state);const detail=document.createElement('p');detail.textContent=item.components.join(' · ');const quota=document.createElement('small');quota.textContent=item.available?`今日剩余 ${item.remaining} / ${item.total}`:'当前凭据未返回此能力额度';card.append(head,detail,quota);host.append(card);}
+}
+
+export function installRadioSettings(panel:HTMLElement){
+ panel.innerHTML=`<h2>服务设置</h2><form autocomplete="off"><fieldset class="credential-fields"><legend>Otto 控制授权</legend><label>当前标签页控制令牌<input name="console_token" type="password" autocomplete="off" placeholder="仅保存在 sessionStorage"></label><div class="settings-actions"><button type="submit">应用令牌</button><button type="button" id="clear-console-token">清除令牌</button></div><p role="status" class="console-auth-status"></p></fieldset><fieldset class="credential-fields"><legend>知乎开放平台</legend><p>Access Secret 只从 Server 的 <code>ZHIHU_ACCESS_SECRET</code> 环境变量读取，浏览器不接收、不保存也不回显密钥。</p><div class="settings-actions"><button type="button" id="refresh-zhihu">验证并刷新能力</button></div><p role="status" class="zhihu-settings-status">正在读取知乎配置…</p><div class="zhihu-capabilities" aria-label="知乎 API 能力"></div></fieldset><p>生产后端只有 Otto Master；浏览器不会直连知乎、MQTT、设备 Socket 或独立小智服务。</p></form>`;
+ const form=panel.querySelector<HTMLFormElement>('form')!,token=form.elements.namedItem('console_token') as HTMLInputElement,authStatus=panel.querySelector<HTMLElement>('.console-auth-status')!,zhihuStatus=panel.querySelector<HTMLElement>('.zhihu-settings-status')!,capabilities=panel.querySelector<HTMLElement>('.zhihu-capabilities')!,refresh=panel.querySelector<HTMLButtonElement>('#refresh-zhihu')!;
+ const renderAuth=()=>{authStatus.textContent=hasConsoleAuthorization()?'当前标签页已提供控制令牌；Server会在受保护请求中继续校验。':'当前标签页未授权，设备控制和知乎私有数据保持锁定。';};
+ const load=async()=>{try{const status=await api<ZhihuStatus>('/v1/zhihu/status');zhihuStatus.textContent=status.configured?'知乎环境凭据已配置':'Server尚未配置 ZHIHU_ACCESS_SECRET';renderCapabilities(capabilities,status.capabilities||[]);}catch(error){zhihuStatus.textContent=(error as Error).message;renderCapabilities(capabilities,[]);}};
+ form.onsubmit=event=>{event.preventDefault();setConsoleToken(token.value);token.value='';renderAuth();void load();};
+ panel.querySelector<HTMLButtonElement>('#clear-console-token')!.onclick=()=>{setConsoleToken('');token.value='';renderAuth();renderCapabilities(capabilities,[]);zhihuStatus.textContent='控制令牌已清除';};
+ refresh.onclick=async()=>{refresh.disabled=true;zhihuStatus.textContent='正在通过知乎 quota 接口验证…';try{const result=await api<{capabilities:Capability[]}>('/v1/zhihu/probe','POST',{});renderCapabilities(capabilities,result.capabilities||[]);zhihuStatus.textContent='知乎凭据有效，能力与额度已刷新';}catch(error){zhihuStatus.textContent=(error as Error).message;}finally{refresh.disabled=false;}};
+ window.addEventListener('otto-auth-change',()=>{renderAuth();void load();});renderAuth();void load();
+ return ()=>{token.value='';};
+}

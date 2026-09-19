@@ -21,7 +21,7 @@ MVP      version 1.0.0  branch test1.0  EVA1/EVA2完整链路通过
 
 Phase 0和Phase 1已在强制门禁建立前完成但没有GitHub检查点，因此不得伪造两段历史；`test0.1` 是一次性恢复基线。支线编号是连续施工检查点，不是产品版本。若中途增加修复检查点，使用下一个自然编号，后续阶段顺延，不复用旧编号，也不特别处理 `test0.9` 到 `test1.0` 的变化。
 
-实际检查点为：`test0.1=Phase 0+1`、`test0.2=Phase 2`、`test0.3=Phase 3`、`test0.4-0.8=Phase 4A-4E`、`test0.9=EVA1语音/WakeGate/单设备工具纵向MVP`。下一未占用支线是`test1.0`，用于多设备WebUI与并发会话可视化，不代表整个1.0.0 MVP已完成。
+实际检查点为：`test0.1=Phase 0+1`、`test0.2=Phase 2`、`test0.3=Phase 3`、`test0.4-0.8=Phase 4A-4E`、`test0.9=EVA1语音/WakeGate/单设备工具纵向MVP`、`test1.0=多设备WebUI/mDNS换网与三机控制`。下一未占用支线是`test1.1`，用于Forge电台前端、知乎官方只读能力和Windows静态交付，不代表整个1.0.0 MVP已完成。
 
 ## 2026-09-18最快MVP关键路径
 
@@ -334,6 +334,17 @@ Provider和协议已经通过独立烟测冻结；`test0.9`又完成EVA1的MQTT+
 4. 云API并发限制、退避和熔断策略。
 5. 消息队列背压和慢消费者策略。
 6. MQTT连接数、消息延迟、命令ACK、完成超时和重连指标。
+
+### `test1.1` Forge电台与知乎只读集成
+
+1. 仓库根 `webui/` 保存Forge电台Vite/TypeScript源码；`otto-master/src/otto_master/web/` 只保存可重现的生产构建快照，Python运行时和Windows交付不依赖Node。
+2. 新界面保留3D仿真和电台视觉，但Server控制必须适配Otto真实 `/api/v1`、稳定`device_id`、控制令牌、批量逐设备结果和对话投影；参考假设备API不得进入生产。
+3. 知乎只走官方 `developer.zhihu.com` 只读API，支持额度探针和单页查询；禁止Cookie抓取、发布、自动翻页与自动重试。
+4. `ZHIHU_ACCESS_SECRET`只从本机环境读取，所有知乎接口沿用控制台授权，响应、错误、事件、日志和SQLite永不包含原值。
+5. Gateway限制超时、响应大小和并发，Service保存非敏感画像与有界内存事件；查询失败只返回稳定错误，不影响设备、MQTT或语音主链。
+6. Windows/macOS CI必须同时验证Python/TypeScript、静态资源递归包数据和PyInstaller加载；生产启动仍只有一个Python进程。
+
+当前进度：实现、本机203项回归、真实知乎最小烟测、Runtime HTTP/优雅关闭和macOS PyInstaller静态资源实跑均已通过；`test1.1`提交后的macOS/Windows远程矩阵是本轮最后门禁，未通过前不得把Windows交付写成完成。
 
 验收：
 

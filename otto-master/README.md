@@ -1,69 +1,82 @@
 # Otto Master
 
-Otto Master 是一个面向 Otto 机器人集群的跨平台 Python Runtime。目标是在单个 Python 进程中完成内嵌MQTT Broker、设备连接、消息总线、云端 ASR/LLM/TTS、Siri 式唤醒、集群动作分发、WebUI、OTA、mDNS 和 SQLite 持久化。
+Otto Master 是面向 Otto/EVA 机器人阵列的跨平台 Python Runtime。一个进程统一承担内嵌MQTT Broker、设备会话、Message Bus、动作Dispatcher、火山ASR/TTS、DeepSeek、WebUI、知乎官方只读API、OTA、mDNS和SQLite。
 
-## 当前状态
+## 当前能力
 
-当前为 **Phase 4D / 0.4.3 本地验收与macOS/Windows跨平台探针通过**：MQTT、认证的TCP `otto-master/1`和Xiaozhi WebSocket v1已翻译到同一设备消息与命令生命周期，Device Session按`mqtt → websocket → tcp`选择当前传输。fake设备已通过真实loopback Socket完成查询、动作、stop、传输隔离和资源释放，WebSocket Opus只以有界内存引用进入Message Bus；全量80个自动测试通过。固件MQTT缺口、EVA1/EVA2真机和Phase 5语音云服务仍未验收。
+- MQTT控制/信令与AES-CTR UDP Opus语音，兼容设备WebSocket和TCP诊断回退
+- EVA1/EVA2/EVA3稳定`device_id`、独立状态、批量动作、stop和正式对话start/stop
+- 每轮本地笑声门禁、火山ASR、DeepSeek流式短回答/安全工具、火山TTS和循环对话
+- Forge电台3D WebUI、真实Server健康、设备选择、动作目录交集、批量控制、对话文字和OTA
+- 知乎开放平台额度探针、只读单页查询、人设设置和显式目标设备朗读
+- macOS/Windows自动测试、原生Opus和PyInstaller smoke
 
-## 核心架构
+仍未完成的整体验收包括多设备并发语音工具隔离、WebSocket真机Profile和实体Windows局域网部署；精确状态见 [docs/DEV_PROGRESS.md](docs/DEV_PROGRESS.md)。
+
+## 架构
 
 ```text
-ESP32 ─ MQTT / TCP / WebSocket ─┐
-                                ▼
-WebUI ─────────────────────── Gateways
-      │
-      ▼
- Message Bus
-   ├── Device Sessions
-   ├── WakeGate
-   ├── Dispatcher
-   ├── Cloud Services
-   └── SQLite Store
+ESP32 MQTT/TCP/WS ─┐
+WebUI HTTP/WS ─────┼─ Gateways ─ Message Bus ─ Device Sessions / WakeGate
+Cloud HTTP/WS ─────┤                         ├─ Dispatcher / TTS / Zhihu Service
+mDNS / OTA ────────┘                         └─ SQLite
 ```
 
-工程采用“模块化单体”：一个工程、一个进程、一个启动命令，但模块职责和副作用边界保持清晰。
+这是模块化单体。浏览器不直连MQTT或设备，知乎/语音/LLM凭据只从环境读取，机器人动作只能经过Dispatcher。
 
-## 启动方式
+## 启动
 
 ```bash
-uv run --project . python -m otto_master
+cp .env.example .env
+uv sync --locked
+uv run python -m otto_master
 ```
 
-入口会持续运行，默认监听Web `8080` 和MQTT `1883`，并在Web端口提供配置的设备WebSocket路径；TCP `8765`默认关闭。Runtime发布 `master.local`，收到 `SIGINT` 或 `SIGTERM` 后按依赖反向关闭。
+Windows PowerShell使用 `Copy-Item .env.example .env`。默认Web端口为 `8081`、MQTT为 `1883`、UDP音频为 `8884`，服务通过 `master.local` 发布。暴露到局域网前必须配置高强度 `OTTO_CONSOLE_TOKEN` 和 `OTTO_PROVISIONING_TOKEN`。
 
-默认配置绑定局域网地址。暴露到局域网前，在本地 `.env` 设置高强度 `OTTO_CONSOLE_TOKEN` 和 `OTTO_PROVISIONING_TOKEN`；未配置时，状态修改、WebSocket事件流和设备发放接口会失败关闭。MQTT禁止匿名连接，Master缺少显式密码时会在 `.local-secrets/` 生成随机本地凭据。
+打开 `http://127.0.0.1:8081`。生产静态资源已经包含在Python包中，不需要Node；只有修改仓库根 `../webui/` 时才使用Node.js 22.12+运行：
+
+```bash
+cd ../webui
+npm ci
+npm run build
+```
+
+## 环境变量
+
+参照 `.env.example` 配置：
+
+- `OTTO_CONSOLE_TOKEN`、`OTTO_PROVISIONING_TOKEN`、`OTTO_MQTT_MASTER_PASSWORD`
+- `OTTO_ASR_API_KEY`、`OTTO_TTS_API_KEY`、`DEEPSEEK_API_KEY`
+- `ZHIHU_ACCESS_SECRET`
+
+真实值不得进入YAML、SQLite、日志、消息、浏览器存储、Git或文档。
 
 ## 开发检查
 
 ```bash
-uv run --project . --extra dev ruff check src tests
-uv run --project . --extra dev mypy src
-uv run --project . --extra dev pytest -q
+uv sync --all-extras --locked
+uv run ruff check src tests
+uv run mypy src
+uv run pytest -q
+uv run python tests/packaging/static_assets_smoke.py
 ```
 
-## 文档入口
+外部API检查必须显式运行：
 
-- [ONBOARD.md](ONBOARD.md)：新会话快速入口
-- [CODEX_MASTER_REQUIREMENTS.md](CODEX_MASTER_REQUIREMENTS.md)：项目宪法
-- [CODEX_CONSTRUCTION_WORKFLOW.md](CODEX_CONSTRUCTION_WORKFLOW.md)：每轮GitHub备份、计划、测试返工、日志与上传的强制门禁
-- [CODEX_ARCHITECTURE.md](CODEX_ARCHITECTURE.md)：模块契约和依赖规则
+```bash
+uv run python tests/external/zhihu_smoke.py
+uv run python tests/external/voice_cloud_smoke.py
+```
+
+## 文档
+
+- [ONBOARD.md](ONBOARD.md)：新会话入口
+- [CODEX_ARCHITECTURE.md](CODEX_ARCHITECTURE.md)：模块与副作用边界
 - [docs/CONSTRUCTION_PLAN.md](docs/CONSTRUCTION_PLAN.md)：施工路线
 - [docs/DEV_PROGRESS.md](docs/DEV_PROGRESS.md)：当前进度
-- [docs/MESSAGE_CONTRACTS.md](docs/MESSAGE_CONTRACTS.md)：内部消息格式
-- [docs/DEVICE_TRANSPORT_CONTRACT.md](docs/DEVICE_TRANSPORT_CONTRACT.md)：MQTT、TCP与Xiaozhi WebSocket设备传输合同
-- [docs/MQTT_CONTROL_CONTRACT.md](docs/MQTT_CONTROL_CONTRACT.md)：MQTT Topic、动作协议、迁移与EVA真机验收
-- [docs/VOLCENGINE_SPEECH_INTEGRATION.md](docs/VOLCENGINE_SPEECH_INTEGRATION.md)：Phase 5火山ASR/TTS、Opus数据流与验收边界
-- [docs/SERVER_CONSOLE_REQUIREMENTS.md](docs/SERVER_CONSOLE_REQUIREMENTS.md)：打包前Web控制台、设备接入、连接验证、动作闭环和验收清单
-
-## 运行产物
-
-以下文件不会在 Phase 0 伪造，运行后再生成或由构建流程放入：
-
-- `data/otto.db`
-- `logs/otto-master.jsonl`
-- `firmware/xiaozhi.bin`
-
-## 参考来源
-
-文档治理方式参考用户提供的 `catnipthon-backup-20250524-phase0.zip`，但已按 Otto Master 的消息总线和机器人集群场景重新编写，没有迁移 Catnipthon 业务代码。
+- [docs/MESSAGE_CONTRACTS.md](docs/MESSAGE_CONTRACTS.md)：内部消息合同
+- [docs/DEVICE_TRANSPORT_CONTRACT.md](docs/DEVICE_TRANSPORT_CONTRACT.md)：设备传输合同
+- [docs/MQTT_CONTROL_CONTRACT.md](docs/MQTT_CONTROL_CONTRACT.md)：MQTT控制合同
+- [docs/VOLCENGINE_SPEECH_INTEGRATION.md](docs/VOLCENGINE_SPEECH_INTEGRATION.md)：语音数据流
+- [docs/SERVER_CONSOLE_REQUIREMENTS.md](docs/SERVER_CONSOLE_REQUIREMENTS.md)：控制台与Windows验收

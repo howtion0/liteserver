@@ -1,14 +1,14 @@
 # Module Status
 
-当前已完成Phase 1-4的软件基座和Phase 4E双机控制门禁；`test0.9`完成EVA1的火山ASR/TTS、DeepSeek文本/工具流、MQTT UDP音频和循环WakeGate纵向链，`test1.0`新增多设备WebUI、对话投影、快捷/批量控制、正式对话控制、ASR三端点与清理加固、空识别熔断、动作音效排空判据、TTS增益、固件看山表情和mDNS换网自动刷新。当前本地187个测试通过；mDNS实现提交`caf7f7f`对应GitHub run `35408550039`的macOS/Windows Tests、原生Opus与打包smoke均通过。EVA1/EVA2/EVA3均运行2.0.16，以独立身份在新网段MQTT在线，三机同批动作已通过；EVA1完整问答与EVA2单会话烟测已完成。动作图目视、多设备并发语音工具隔离、WebSocket真机与Windows实体部署仍未完成。
+当前已完成Phase 1-4的软件基座和Phase 4E双机控制门禁；`test0.9`完成EVA1的火山ASR/TTS、DeepSeek文本/工具流、MQTT UDP音频和循环WakeGate纵向链，`test1.0`新增多设备控制、对话/动作加固、固件看山表情和mDNS换网自动刷新。`test1.1`进一步把Forge电台Vite/TypeScript前端接到真实Otto API，并把知乎官方只读Gateway/Service和静态资源跨平台交付纳入同一Python进程。当前本地203个测试、Ruff、mypy、干净前端构建、Runtime HTTP和PyInstaller静态资源smoke均通过；本轮远程macOS/Windows CI待push后确认。EVA1/EVA2/EVA3均运行2.0.16并有三机同批动作历史证据；动作图目视、多设备并发语音工具隔离、WebSocket真机与实体Windows部署仍未完成。
 
 | 模块 | 文件 | 状态 |
 |---|---|---|
 | Package entry | `__main__.py` | Phase 1已实现 |
-| Runtime | `runtime.py` | Phase 1-5纵向链已组装（含三设备Gateway、MQTT UDP、Cloud/ASR/LLM/TTS/WakeGate有序启停与失败回滚） |
+| Runtime | `runtime.py` | Phase 1-5纵向链已组装（含三设备Gateway、MQTT UDP、Cloud/ASR/LLM/TTS/WakeGate、Zhihu Gateway/Service有序启停与失败回滚） |
 | Messages | `messages.py` | Phase 1已实现 |
 | Message Bus | `message_bus.py` | Phase 1+2已实现（含全消息observer） |
-| Config | `config.py` | 已实现设备传输、语音Provider、有界队列、TTS PCM增益、8秒静默、12秒utterance上限与笑声门禁配置，并校验端点/云超时余量；Key只从环境读取 |
+| Config | `config.py` | 已实现设备传输、语音Provider、有界队列、TTS PCM增益、8秒静默、12秒utterance上限、笑声门禁和知乎超时/响应/并发配置；云端Key与Access Secret只从环境读取 |
 | Structured logging | `structured_logging.py` | Phase 1已实现 |
 | Device WebSocket Gateway | `gateways/device_ws.py` | 已实现Xiaozhi v1认证、hello/listen/VAD/abort/goodbye、Otto扩展与有界Opus引用缓冲；语音真机Profile未验收 |
 | Embedded MQTT Broker | `gateways/mqtt_broker.py` | Phase 3已实现；macOS/Windows CI与PyInstaller smoke通过 |
@@ -17,8 +17,9 @@
 | Device UDP Gateway | `gateways/device_udp.py` | 已实现按设备/session隔离的AES-128-CTR UDP Opus、序号校验、有界缓冲和清理 |
 | Device audio router | `gateways/device_audio.py` | 已实现WebSocket与MQTT UDP统一帧引用读取和TTS播放选择 |
 | Legacy Device TCP Gateway | `gateways/device_tcp.py` | Phase 4D已实现认证的`otto-master/1`换行JSON、替换连接与命令生命周期 |
-| Web/REST/OTA Gateway | `gateways/web.py` | 已实现控制面、设备/事件读取、验证、命令API、TCP/WS受保护发放、显式多设备批量动作/stop及脱敏对话投影 |
+| Web/REST/OTA Gateway | `gateways/web.py` | 已实现控制面、设备/事件读取、验证、命令API、TCP/WS受保护发放、显式多设备批量动作/stop、脱敏对话投影、知乎受保护API、显式设备朗读和递归静态资源入口 |
 | Cloud Gateway | `gateways/cloud.py` | 已实现火山ASR二进制WS、火山TTS流式HTTP、DeepSeek文本/工具SSE与稳定错误映射 |
+| Zhihu Gateway | `gateways/zhihu.py` | 已实现官方域名锁定、Bearer/时间戳、只读工具白名单、严格URL/分页参数、2路并发、超时、2 MiB响应上限、无重试和稳定错误映射 |
 | mDNS Gateway | `gateways/mdns.py` | 已实现注册/解析/注销，并以可配置周期监视IPv4、原位更新服务、保留最后有效LAN记录及公开刷新健康状态 |
 | Device Manager | `devices/manager.py` | Phase 4A+4D已实现设备去重、每传输快照、固定优先级选择、故障隔离与降级 |
 | Device Session | `devices/session.py` | Phase 4A+4D已实现身份、每传输在线/心跳/Profile及首选传输快照隔离；当前快照包含本地音效、显示别名和输出音量 |
@@ -26,6 +27,8 @@
 | Device Verifier | `devices/verifier.py` | Phase 4B+4D已实现只读预检、锁定transport、严格响应关联与超时/断线中断 |
 | ASR Service | `services/asr.py` | 已实现每设备arm、当前750帧队列、180 ms块、相互独立的partial稳定/VAD静音/12秒硬上限三端点、尾帧排空、原子取消清理及丢帧分类指标 |
 | TTS Service | `services/tts.py` | 已实现句子4/PCM16/Opus48有界流水线、24 kHz S16LE饱和增益、跨块半采样保留、60 ms Opus和paced播放 |
+| Zhihu Service | `services/zhihu.py` | 已实现官方能力探针、单页查询、非敏感画像SQLite设置和仅含元数据的有界内存事件；查询结果不持久化 |
+| Device narration | `services/narration.py` | 已实现稳定12位device_id校验、600字符边界并复用既有TTS Service，不增加第二条浏览器音频链 |
 | LLM Service | `services/llm.py` | 已实现DeepSeek文本/单工具SSE、有界生产消费、工具前未成句前缀丢弃、已成句前缀有序输出、短文本历史和输入/输出截断 |
 | Robot Tool Bridge | `services/robot_tools.py` | 已实现设备目录到安全Schema、当前设备锁定、参数二次校验、确定性命令ID、Dispatcher终态等待和失败安全stop |
 | WakeGate | `services/wake_gate.py` | 已实现每轮真实笑声门禁、瞬时状态查询超时重试、动作提交前持续等待action与sound共同空闲、循环问答、首次空final笑一次/连续第二次正常退出、TTS stop后串行工具、成功无结果复述、笑声复用、仅由非空partial取消的8秒静默、按钮goodbye和新session失败自恢复 |
@@ -34,16 +37,18 @@
 | Opus | `audio/opus.py` | 已实现16/24 kHz单声道解码、60 ms编码、跨块缓冲和尾帧补齐；Windows打包待验收 |
 | Database | `storage/database.py` | Phase 2-4C已实现（设备/动作快照及命令/结果持久） |
 | Migrations | `storage/migrations.py` | Phase 2+4A+4C已实现，当前schema v3 |
-| WebUI HTML | `web/index.html` | 已实现系统概览、设备多选、常用动作快捷区、高级批量动作/stop、正式对话控制和独立对话泳道结构 |
-| WebUI JavaScript | `web/app.js` | 已实现令牌认证、仅限loopback的fragment授权引导、授权徽标/未授权锁定/常驻错误、目录自动verify/交集、显式确认、批量API、对话快照和事件恢复 |
-| WebUI CSS | `web/style.css` | 已实现多设备控制与对话卡片的离线响应式样式 |
+| WebUI source | `../webui/` | 独立Vite/TypeScript工程，以Forge电台3D工作台为主；接入同源Otto真实API，不含参考假后端、Worker、浏览器MQTT或小智音频桥 |
+| WebUI runtime snapshot | `web/` | 由`npm run build`生成的离线哈希JS/CSS、HTML、3D模型、图片和GIF；递归纳入wheel与PyInstaller，生产无需Node |
 | Message Bus tests | `tests/test_message_bus.py` | Phase 1已实现 |
 | Message contract tests | `tests/test_messages.py` | Phase 1已实现 |
-| Config tests | `tests/test_config.py` | 覆盖既有配置、TTS增益范围/非有限值拒绝、12秒端点与云超时余量及mDNS刷新周期下限 |
+| Config tests | `tests/test_config.py` | 覆盖既有配置、TTS增益范围/非有限值拒绝、12秒端点与云超时余量、mDNS刷新周期及知乎官方域名/边界配置 |
 | Runtime tests | `tests/test_runtime.py` | 覆盖三Gateway、Broker、语音组件装配、动作/stop、隔离与端口闭环 |
 | Storage tests | `tests/test_storage.py` | Phase 2+4A+4C已实现 |
 | Command repository tests | `tests/test_command_repository.py` | Phase 4C已实现幂等、转移、历史与重启恢复 |
-| Web tests | `tests/test_web.py` | 覆盖既有控制面、批量并发/目标拒绝、逐设备结果及对话投影隔离/脱敏/旧session |
+| Web tests | `tests/test_web.py` | 覆盖既有控制面、批量并发/目标拒绝、逐设备结果、对话投影、知乎鉴权/错误/朗读，以及Forge首页和嵌套静态资源 |
+| Zhihu tests | `tests/test_zhihu.py` | 覆盖官方URL、只读参数、额度、错误、浏览器安全整数、响应上限、无重试、并发上限、密钥脱敏和非持久查询结果 |
+| Narration tests | `tests/test_narration.py` | 覆盖稳定设备目标、文本边界、空文本拒绝和TTS复用 |
+| Static packaging smoke | `tests/packaging/static_assets_smoke.py` | 本机源码与PyInstaller onefile实跑均通过；GitHub矩阵已配置macOS/Windows构建及执行，远程结果待本轮push |
 | MQTT Broker tests | `tests/test_mqtt_broker.py` | Phase 3+4D已实现凭据与三传输发放边界 |
 | Device MQTT tests | `tests/test_device_mqtt.py` | 覆盖上下行身份、命令、语音控制、VAD/session边界与transport隔离 |
 | Device UDP tests | `tests/test_device_udp.py` | 覆盖AES-CTR数据包、session、frame_ref、VAD、乱序和关闭清理 |

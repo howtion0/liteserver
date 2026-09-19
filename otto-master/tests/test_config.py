@@ -13,6 +13,7 @@ def test_repository_config_loads_without_exposing_secret_values() -> None:
             "OTTO_CONSOLE_TOKEN": "console-super-secret",
             "OTTO_MQTT_MASTER_PASSWORD": "mqtt-super-secret",
             "OTTO_PROVISIONING_TOKEN": "provision-super-secret",
+            "ZHIHU_ACCESS_SECRET": "zhihu-super-secret",
         }
     )
 
@@ -32,6 +33,10 @@ def test_repository_config_loads_without_exposing_secret_values() -> None:
     assert config.cloud.tts.speaker == "zh_female_wanqudashu_moon_bigtts"
     assert config.cloud.tts.resource_id == "volc.service_type.10029"
     assert config.audio.tts_pcm_gain == 2.0
+    assert config.zhihu.enabled is True
+    assert config.zhihu.base_url == "https://developer.zhihu.com"
+    assert config.zhihu.max_response_bytes == 2_000_000
+    assert config.zhihu.max_concurrency == 2
     assert config.ota.firmware_version == "2.0.16"
     assert config.mqtt.enabled is True
     assert config.mqtt.port == 1883
@@ -52,6 +57,7 @@ def test_repository_config_loads_without_exposing_secret_values() -> None:
     assert config.secrets.console_token == "console-super-secret"
     assert config.secrets.mqtt_master_password == "mqtt-super-secret"
     assert config.secrets.provisioning_token == "provision-super-secret"
+    assert config.secrets.zhihu_access_secret == "zhihu-super-secret"
     assert config.resolve_path(config.logging.jsonl_path).name == "otto-master.jsonl"
     assert "super-secret" not in repr(config)
 
@@ -150,4 +156,21 @@ def test_mdns_refresh_interval_must_be_at_least_one_second(tmp_path: Path) -> No
     )
 
     with pytest.raises(ConfigError, match="discovery.refresh_interval_seconds"):
+        load_config(target)
+
+
+def test_zhihu_gateway_is_locked_to_the_official_https_origin(tmp_path: Path) -> None:
+    source = Path(__file__).parents[1] / "config.yaml"
+    target = tmp_path / "config.yaml"
+    contents = source.read_text(encoding="utf-8")
+    target.write_text(
+        contents.replace(
+            "  base_url: https://developer.zhihu.com",
+            "  base_url: https://example.invalid",
+            1,
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ConfigError, match="zhihu.base_url"):
         load_config(target)

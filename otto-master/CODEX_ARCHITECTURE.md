@@ -162,6 +162,8 @@ TCP不是第二套业务模型。Phase 4D已用真实loopback Socket验证查询
 - 将显式设备选择转换为动作目录交集、快捷动作按钮和正式对话start/stop；每个目标仍经Message Bus、能力门禁和关联ACK，不允许浏览器直发设备协议。
 - 控制面把“只读状态可见”和“当前标签页可下发命令”分开显示；无令牌或401时锁定动作/对话控件并常驻显示失败原因。正式Runtime固定使用HTTP 8081，旧8080诊断进程不得与其并存造成入口歧义。
 - 设备发放接口与Browser API分离；只有受保护的发放响应可以返回该设备自己的MQTT、TCP和WebSocket凭据。
+- `test1.1`起，浏览器源码位于仓库根 `webui/`，以Forge电台的3D视觉和交互为主；生产构建快照仍由Python包内 `web/` 提供。浏览器只调用同源 `/api/v1/*`，参考工程中的假设备Server、Node生产服务、Cloudflare Worker和浏览器直连小智音频桥不进入Runtime。
+- 新控制台必须适配Otto已经冻结的真实字段、鉴权、批量结果和事件语义，禁止为了兼容参考占位后端而伪造成功或改变设备领域合同。
 
 WebUI不能直接获得或持有设备Socket或MQTT设备凭据，也不能指定任意MQTT Topic。
 
@@ -179,7 +181,18 @@ Phase 5首个Provider锁定为火山引擎豆包语音：ASR使用双向流式We
 
 `test0.9`已实现火山ASR/TTS与DeepSeek SSE adapter；请求均为流式，并通过有界生产者/消费者队列向下游施加背压。真实EVA1闭环已经通过，但正式双设备、双Profile、Windows/PyInstaller矩阵尚未完成。
 
-API Key只从 `OTTO_ASR_API_KEY`、`OTTO_TTS_API_KEY` 对应环境变量读取，不得进入配置文件、Message、SQLite、Browser事件或设备协议。完整协议和烟测证据见 `docs/VOLCENGINE_SPEECH_INTEGRATION.md`。
+API Key只从 `OTTO_ASR_API_KEY`、`OTTO_TTS_API_KEY`、`DEEPSEEK_API_KEY` 对应环境变量读取，不得进入配置文件、Message、SQLite、Browser事件或设备协议。完整协议和烟测证据见 `docs/VOLCENGINE_SPEECH_INTEGRATION.md`。
+
+### 5.6.1 Zhihu Gateway 与 Service
+
+文件：`gateways/zhihu.py`、`services/zhihu.py`
+
+- 只访问 `developer.zhihu.com` 官方只读接口；不接受Cookie，不抓取网页，不提供发布、点赞、关注或自动遍历分页。
+- Gateway负责Bearer鉴权、时间戳、HTTP超时、2 MB响应上限、Provider协议解析和稳定错误翻译；Service负责查询编排、画像设置、能力快照和有界内存事件。Web Gateway不解析知乎原始响应。
+- Access Secret只从 `ZHIHU_ACCESS_SECRET` 环境变量读取，运行时状态最多返回 `configured=true|false`，永不回显原值，也不写SQLite、Message Bus、日志或浏览器存储。
+- 查询使用有界并发且不自动重试。特别是知乎直答POST发生超时后不得重放；限流、额度耗尽和风控均原样转成稳定失败，由用户决定是否再次请求。
+- 所有知乎及画像API都要求现有控制台授权，因为响应可能包含Access Secret所属账号的私人内容。画像可作为普通非密钥设置写入SQLite；查询结果只保存在有界内存事件中。
+- 浏览器若要求机器人朗读结果，只能显式选择稳定`device_id`，再经Web Gateway和既有TTS Service下发；不得获得设备凭据或绕过设备音频路由。
 
 ### 5.7 mDNS Gateway
 
@@ -328,9 +341,14 @@ SQLite建议实体：
 
 ## 11. Web assets
 
-文件：`web/index.html`、`web/app.js`、`web/style.css`
+源文件：仓库根 `webui/`
 
-第一版使用无构建步骤的原生HTML/CSS/JavaScript，由Python直接提供。不得引入独立Node.js构建链。
+运行时快照：`src/otto_master/web/`
+
+- `webui/` 是独立的Vite/TypeScript前端工程，保留Forge电台3D模型、贴图和界面源码；它不包含生产后端，也不能成为第二个服务进程。
+- `npm run build` 必须先执行TypeScript检查，再把完整离线快照输出到Python包内 `web/`。该快照纳入Git、wheel package data和PyInstaller递归收集，因此macOS或Windows生产运行都不需要Node.js、npm或CDN。
+- Python Web Gateway在全部 `/api/v1/*` 和设备WebSocket路由之后挂载该静态目录，递归提供HTML、哈希JS/CSS、模型、图片和GIF；未知静态路径不得覆盖API。
+- 前端构建依赖只属于开发工具，不能进入Runtime依赖或启动脚本。构建输出必须可由干净的 `npm ci && npm run build` 重现。
 
 ## 12. Import与组装规则
 

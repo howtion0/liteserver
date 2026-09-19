@@ -34,13 +34,16 @@ from .gateways.device_ws import DeviceWebsocketGateway
 from .gateways.mdns import MdnsError, MdnsGateway
 from .gateways.mqtt_broker import EmbeddedMqttBroker
 from .gateways.web import EventHub, WebContext, WebGateway
+from .gateways.zhihu import ZhihuGateway
 from .message_bus import MessageBus
 from .services.asr import AsrService
 from .services.conversation_control import ConversationControlService
 from .services.llm import LlmService
+from .services.narration import DeviceNarrationService
 from .services.robot_tools import RobotToolBridge
 from .services.tts import TtsService
 from .services.wake_gate import WakeGateService
+from .services.zhihu import ZhihuService
 from .storage.database import Database, MessageLogSubscriber
 from .structured_logging import close_otto_handlers, configure_logging
 
@@ -134,6 +137,20 @@ class Runtime:
         self.robot_tools: RobotToolBridge | None = None
         self.wake_gate: WakeGateService | None = None
         self._assemble_voice_mvp()
+        self.zhihu_gateway = ZhihuGateway(
+            config.zhihu,
+            config.secrets.zhihu_access_secret,
+        )
+        self.zhihu_service = ZhihuService(
+            self.zhihu_gateway,
+            self.database,
+            history_size=config.zhihu.event_history_size,
+        )
+        self.narration_service = (
+            DeviceNarrationService(self.tts_service)
+            if self.tts_service is not None
+            else None
+        )
         self.mdns = MdnsGateway(
             config.discovery,
             http_port=config.server.port,
@@ -157,6 +174,8 @@ class Runtime:
                 started_at=self._started_at,
                 started_monotonic=self._started_monotonic,
                 device_websocket=self.device_websocket,
+                zhihu=self.zhihu_service,
+                narrator=self.narration_service,
             )
         )
         self.worker_pool = ThreadPoolExecutor(
@@ -203,6 +222,7 @@ class Runtime:
                 await self.asr_service.start()
             if self.wake_gate is not None:
                 await self.wake_gate.start()
+            await self.zhihu_gateway.start()
             await self.web.start()
             try:
                 await self.mdns.start()
@@ -262,6 +282,7 @@ class Runtime:
         try:
             await self._stop_with_timeout(self.mdns.shutdown(), "mDNS")
             await self._stop_with_timeout(self.web.shutdown(), "web gateway")
+            await self._stop_with_timeout(self.zhihu_gateway.shutdown(), "Zhihu gateway")
             if self.wake_gate is not None:
                 await self._stop_with_timeout(self.wake_gate.shutdown(), "wake gate")
             if self.asr_service is not None:
@@ -329,6 +350,7 @@ class Runtime:
             "conversation_control": self.conversation_control.status(),
             "dispatcher": self.dispatcher.status(),
             "voice_mvp": self._voice_status(),
+            "zhihu": self.zhihu_service.status(),
             "web": self.web.status(),
             "mdns": self.mdns.status(),
             "ota": {
@@ -351,6 +373,7 @@ class Runtime:
         try:
             await self._stop_with_timeout(self.mdns.shutdown(), "mDNS")
             await self._stop_with_timeout(self.web.shutdown(), "web gateway")
+            await self._stop_with_timeout(self.zhihu_gateway.shutdown(), "Zhihu gateway")
             if self.wake_gate is not None:
                 await self._stop_with_timeout(self.wake_gate.shutdown(), "wake gate")
             if self.asr_service is not None:

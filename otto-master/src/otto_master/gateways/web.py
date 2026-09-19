@@ -32,6 +32,7 @@ from ..messages import JsonValue, Message
 from ..services.conversation_control import ConversationControlError
 from ..storage.database import Database, sanitize_payload
 from .mqtt_broker import EmbeddedMqttBroker, MqttBrokerError
+from .zhihu import ZhihuGatewayError
 
 ComponentStatusProvider = Callable[[], Mapping[str, Mapping[str, Any]]]
 
@@ -91,6 +92,32 @@ class ConversationControlReader(Protocol):
 
 class DeviceWebsocketHandler(Protocol):
     async def handle(self, websocket: WebSocket) -> None: ...
+
+
+class ZhihuReader(Protocol):
+    def status(self) -> dict[str, Any]: ...
+
+    def tools(self) -> dict[str, Any]: ...
+
+    async def persona(self) -> dict[str, str]: ...
+
+    async def save_persona(self, values: dict[str, str]) -> dict[str, str]: ...
+
+    async def probe(self) -> dict[str, Any]: ...
+
+    async def query(self, tool: str, arguments: dict[str, Any]) -> dict[str, Any]: ...
+
+    async def events(self, *, after: int = 0, limit: int = 64) -> dict[str, Any]: ...
+
+
+class NarrationReader(Protocol):
+    async def narrate(
+        self,
+        device_id: str,
+        text: str,
+        *,
+        correlation_id: str | None = None,
+    ) -> dict[str, Any]: ...
 
 
 def _now() -> str:
@@ -177,6 +204,29 @@ class ProvisionRequest(BaseModel):
 
     mac: str = Field(min_length=12, max_length=17)
     name: str | None = Field(default=None, min_length=1, max_length=80)
+
+
+class ZhihuQueryRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    tool: str = Field(min_length=1, max_length=40)
+    arguments: dict[str, Any] = Field(default_factory=dict, max_length=16)
+
+
+class ZhihuPersonaUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(default="奶龙", max_length=80)
+    persona: str = Field(default="", max_length=4_000)
+    memory: str = Field(default="", max_length=4_000)
+    interests: str = Field(default="", max_length=2_000)
+
+
+class ZhihuNarrationRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    device_id: str = Field(pattern=r"^[0-9a-f]{12}$")
+    text: str = Field(min_length=1, max_length=4_000)
 
 
 @dataclass(slots=True)
@@ -568,6 +618,8 @@ class WebContext:
     started_monotonic: float
     device_websocket: DeviceWebsocketHandler | None = None
     conversation_control: ConversationControlReader | None = None
+    zhihu: ZhihuReader | None = None
+    narrator: NarrationReader | None = None
 
 
 def _correlation_id(request: Request) -> str:
@@ -678,6 +730,10 @@ def _dispatch_api_error(exc: DispatchRequestError) -> ApiError:
     else:
         status_code = 503
     return ApiError(status_code, exc.code, exc.message)
+
+
+def _zhihu_api_error(exc: ZhihuGatewayError) -> ApiError:
+    return ApiError(exc.status_code, f"zhihu_{exc.code}", exc.message)
 
 
 def _batch_device_ids(values: list[str]) -> tuple[str, ...]:
@@ -1246,6 +1302,94 @@ def create_app(context: WebContext) -> FastAPI:
             "saved_at": _now(),
         }
 
+    @app.get("/api/v1/zhihu/status")
+    async def zhihu_status(request: Request) -> dict[str, Any]:
+        _require_console_access(request, context.config)
+        if context.zhihu is None:
+            raise _component_not_ready("zhihu")
+        return context.zhihu.status()
+
+    @app.get("/api/v1/zhihu/tools")
+    async def zhihu_tools(request: Request) -> dict[str, Any]:
+        _require_console_access(request, context.config)
+        if context.zhihu is None:
+            raise _component_not_ready("zhihu")
+        return context.zhihu.tools()
+
+    @app.get("/api/v1/zhihu/persona")
+    async def zhihu_persona(request: Request) -> dict[str, str]:
+        _require_console_access(request, context.config)
+        if context.zhihu is None:
+            raise _component_not_ready("zhihu")
+        return await context.zhihu.persona()
+
+    @app.put("/api/v1/zhihu/persona")
+    async def put_zhihu_persona(
+        payload: ZhihuPersonaUpdate,
+        request: Request,
+    ) -> dict[str, str]:
+        _require_console_access(request, context.config)
+        if context.zhihu is None:
+            raise _component_not_ready("zhihu")
+        return await context.zhihu.save_persona(payload.model_dump())
+
+    @app.post("/api/v1/zhihu/probe")
+    async def probe_zhihu(request: Request) -> dict[str, Any]:
+        _require_console_access(request, context.config)
+        if context.zhihu is None:
+            raise _component_not_ready("zhihu")
+        try:
+            return await context.zhihu.probe()
+        except ZhihuGatewayError as exc:
+            raise _zhihu_api_error(exc) from exc
+
+    @app.post("/api/v1/zhihu/query")
+    async def query_zhihu(
+        payload: ZhihuQueryRequest,
+        request: Request,
+    ) -> dict[str, Any]:
+        _require_console_access(request, context.config)
+        if context.zhihu is None:
+            raise _component_not_ready("zhihu")
+        try:
+            return await context.zhihu.query(payload.tool, payload.arguments)
+        except ZhihuGatewayError as exc:
+            raise _zhihu_api_error(exc) from exc
+
+    @app.get("/api/v1/zhihu/events")
+    async def zhihu_events(
+        request: Request,
+        after: int = Query(default=0, ge=0),
+        limit: int = Query(default=64, ge=1, le=128),
+    ) -> dict[str, Any]:
+        _require_console_access(request, context.config)
+        if context.zhihu is None:
+            raise _component_not_ready("zhihu")
+        return await context.zhihu.events(after=after, limit=limit)
+
+    @app.post("/api/v1/zhihu/narrate")
+    async def narrate_zhihu(
+        payload: ZhihuNarrationRequest,
+        request: Request,
+    ) -> dict[str, Any]:
+        _require_console_access(request, context.config)
+        if context.narrator is None:
+            raise _component_not_ready("voice narration")
+        try:
+            return await context.narrator.narrate(
+                payload.device_id,
+                payload.text,
+                correlation_id=_correlation_id(request),
+            )
+        except ValueError as exc:
+            raise ApiError(422, "invalid_narration", str(exc)) from exc
+        except RuntimeError as exc:
+            raise ApiError(
+                409,
+                "narration_unavailable",
+                "device narration is unavailable or already busy",
+            ) from exc
+
     @app.get("/api/v1/firmware")
     async def firmware_status() -> dict[str, Any]:
         return await firmware.status()
@@ -1431,11 +1575,11 @@ def create_app(context: WebContext) -> FastAPI:
             await context.events.unsubscribe(subscription.subscription_id)
 
     static_path = Path(__file__).resolve().parents[1] / "web"
-    app.mount("/assets", StaticFiles(directory=static_path), name="assets")
-
-    @app.get("/", include_in_schema=False)
-    async def index() -> FileResponse:
-        return FileResponse(static_path / "index.html", media_type="text/html")
+    app.mount(
+        "/",
+        StaticFiles(directory=static_path, html=True),
+        name="webui",
+    )
 
     return app
 

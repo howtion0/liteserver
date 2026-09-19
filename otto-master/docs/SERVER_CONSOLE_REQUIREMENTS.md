@@ -1,6 +1,8 @@
 # Otto Master Server 控制台需求
 
-本文档定义 Otto Master 在打包前必须具备的 Server Web 控制台、MQTT设备接入、动作控制和连接验证能力。它描述产品行为和验收标准，不代表功能已经实现。
+本文档定义 Otto Master 在打包前必须具备的 Server Web 控制台、MQTT设备接入、动作控制和连接验证能力。它描述产品行为和验收标准；实际完成状态以`DEV_PROGRESS.md`和当轮Session Contract为准。
+
+`test1.1`起，控制台源码位于仓库根`webui/`，以Forge电台3D工作台为视觉主版本；构建快照由同一个Python Web Gateway离线提供。Otto既有API、稳定设备身份、鉴权、Dispatcher和命令生命周期仍是后端唯一事实源，参考工程的假设备后端不进入生产。
 
 本文中的P0是打包前必需项。任一P0验收未通过，不得进入Windows正式打包或标记MVP完成。
 
@@ -30,7 +32,7 @@ ESP32的ACK、状态、心跳和结果按相反方向回到浏览器。
 - 动态IP只用于诊断显示，不能写入Topic、收藏目标或永久控制规则。
 - WebUI不得绕过Message Bus、Dispatcher和Device Session直接访问设备连接。
 - 页面关闭、刷新或浏览器断开不得停止Server、Broker和设备会话。
-- 第一版使用原生HTML、CSS和JavaScript，不增加Node.js运行或构建依赖。
+- 前端开发使用Vite/TypeScript并提交可重现构建快照；生产运行和Windows交付不得依赖Node.js、npm、CDN或第二个Web服务。
 
 ## 2. P0页面与信息架构
 
@@ -374,6 +376,7 @@ WebUI请求
 
 - macOS和Windows使用相同页面、API和数据合同。
 - 静态资源随Python包或可执行文件提供，不依赖CDN和互联网。
+- Forge的哈希JS/CSS、HTML、3D模型、图片和GIF必须递归进入wheel与PyInstaller；打包smoke必须在解包后的运行态实际读取嵌套资源，不能只检查源码目录存在。
 - 使用可写用户数据目录保存SQLite、日志、配置和固件，不向只读安装目录写运行数据。
 - PyInstaller包能找到HTML、CSS、JavaScript、证书和必要动态库。
 - 首次启动明确提示Windows防火墙所需局域网权限和实际监听端口。
@@ -399,6 +402,8 @@ WebUI请求
 - [ ] 广播拆成单设备命令并保留部分失败。
 - [ ] 页面事件流断线重连后快照与增量一致。
 - [ ] 日志、API和事件流完成密钥脱敏。
+- [ ] Forge控制台只调用同源Otto真实API；无参考假设备、浏览器MQTT、Cloudflare Worker或浏览器小智音频回退。
+- [ ] 知乎、画像和朗读接口全部要求控制台授权，Access Secret不会进入响应、日志、SQLite、前端产物或事件。
 
 ### 11.2 Embedded Broker集成
 
@@ -431,6 +436,7 @@ WebUI请求
 - [ ] 浏览器长时间打开、刷新和断网恢复后状态一致。
 - [ ] 可执行文件路径含空格和中文时仍能启动并读写用户数据目录。
 - [ ] 退出后无残留进程、占用端口和数据库锁。
+- [ ] 可执行文件内可读取Forge首页、哈希JS/CSS、模型、贴图和表情资源，生产机不安装Node也能打开完整页面。
 
 ## 12. 打包准入定义
 

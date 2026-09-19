@@ -160,6 +160,18 @@ class CloudConfig:
 
 
 @dataclass(frozen=True, slots=True)
+class ZhihuConfig:
+    enabled: bool
+    base_url: str
+    access_secret_env: str
+    request_timeout_seconds: float
+    answer_timeout_seconds: float
+    max_response_bytes: int
+    max_concurrency: int
+    event_history_size: int
+
+
+@dataclass(frozen=True, slots=True)
 class OtaConfig:
     enabled: bool
     firmware_path: str
@@ -184,6 +196,7 @@ class RuntimeSecrets:
     asr_api_key: str | None = field(default=None, repr=False)
     llm_api_key: str | None = field(default=None, repr=False)
     tts_api_key: str | None = field(default=None, repr=False)
+    zhihu_access_secret: str | None = field(default=None, repr=False)
 
 
 @dataclass(frozen=True, slots=True)
@@ -203,6 +216,7 @@ class AppConfig:
     audio: AudioConfig
     wake: WakeConfig
     cloud: CloudConfig
+    zhihu: ZhihuConfig
     ota: OtaConfig
     logging: LoggingConfig
     config_path: Path
@@ -466,6 +480,7 @@ def load_config(
     audio = _section(root, "audio")
     wake = _section(root, "wake")
     cloud = _section(root, "cloud")
+    zhihu = _section(root, "zhihu")
     ota = _section(root, "ota")
     logging_config = _section(root, "logging")
 
@@ -490,6 +505,14 @@ def load_config(
     asr_api_key_env = _string(cloud_asr, "api_key_env", "cloud.asr")
     llm_api_key_env = _string(cloud_llm, "api_key_env", "cloud.llm")
     tts_api_key_env = _string(cloud_tts, "api_key_env", "cloud.tts")
+    zhihu_access_secret_env = _string(
+        zhihu,
+        "access_secret_env",
+        "zhihu",
+    )
+    zhihu_base_url = _string(zhihu, "base_url", "zhihu").rstrip("/")
+    if zhihu_base_url != "https://developer.zhihu.com":
+        raise ConfigError("zhihu.base_url must be https://developer.zhihu.com")
     speech_end_grace_seconds = _float(
         wake,
         "speech_end_grace_seconds",
@@ -699,6 +722,46 @@ def load_config(
             llm=_provider(cloud_llm, "cloud.llm"),
             tts=_provider(cloud_tts, "cloud.tts"),
         ),
+        zhihu=ZhihuConfig(
+            enabled=_bool(zhihu, "enabled", "zhihu"),
+            base_url=zhihu_base_url,
+            access_secret_env=zhihu_access_secret_env,
+            request_timeout_seconds=_float(
+                zhihu,
+                "request_timeout_seconds",
+                "zhihu",
+                minimum=0.1,
+                maximum=120,
+            ),
+            answer_timeout_seconds=_float(
+                zhihu,
+                "answer_timeout_seconds",
+                "zhihu",
+                minimum=0.1,
+                maximum=180,
+            ),
+            max_response_bytes=_int(
+                zhihu,
+                "max_response_bytes",
+                "zhihu",
+                minimum=1_024,
+                maximum=16 * 1024 * 1024,
+            ),
+            max_concurrency=_int(
+                zhihu,
+                "max_concurrency",
+                "zhihu",
+                minimum=1,
+                maximum=32,
+            ),
+            event_history_size=_int(
+                zhihu,
+                "event_history_size",
+                "zhihu",
+                minimum=1,
+                maximum=1_000,
+            ),
+        ),
         ota=OtaConfig(
             enabled=_bool(ota, "enabled", "ota"),
             firmware_path=_string(ota, "firmware_path", "ota"),
@@ -719,5 +782,9 @@ def load_config(
             asr_api_key=_optional_secret(selected_environment, asr_api_key_env),
             llm_api_key=_optional_secret(selected_environment, llm_api_key_env),
             tts_api_key=_optional_secret(selected_environment, tts_api_key_env),
+            zhihu_access_secret=_optional_secret(
+                selected_environment,
+                zhihu_access_secret_env,
+            ),
         ),
     )

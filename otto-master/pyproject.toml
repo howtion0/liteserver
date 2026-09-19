@@ -42,7 +42,13 @@ include-package-data = true
 where = ["src"]
 
 [tool.setuptools.package-data]
-otto_master = ["web/*"]
+otto_master = [
+    "web/*",
+    "web/art/*",
+    "web/assets/*",
+    "web/faces/*",
+    "web/models/*",
+]
 
 [tool.mypy]
 python_version = "3.11"

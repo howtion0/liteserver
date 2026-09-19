@@ -309,3 +309,14 @@
 - 自动验证：全量187项pytest、Ruff、mypy strict（38个源码文件）、Node语法、锁文件和差异检查通过；Server测试覆盖地址变化、回环保护及失败后恢复，固件完整构建通过。当前Runtime广播`192.168.122.225`且监视健康。
 - 交付：实现与实测记录已提交并push为`caf7f7f7f8b254e4697fd165b65bb76036df908d`；GitHub Actions run `35408550039`的Windows/macOS Tests、原生Opus和PyInstaller broker smoke全部PASS。
 - 待完成：多设备并发语音/工具、WebSocket真机和实体Windows留到下一轮；本轮回填文档后暂停。
+
+### 2026-09-19 / test1.1 / Forge电台、知乎官方只读后端与GitHub入口
+
+- 基线：从已验收的`test1.0@18181851401e8ebef516c71d847b76e924c27f26`建立`test1.1`；固件仓库和EVA 2.0.16均未修改。根目录用户参考ZIP、`forge-radio/`、看山贴图、`.DS_Store`和临时方案文档继续排除。
+- 前端：仓库根`webui/`保存Forge电台Vite/TypeScript源码与离线素材，保留3D工作台、电台和Server分区；参考假设备、Node/Worker生产后端和浏览器小智音频桥没有迁入。Server页已适配Otto真实健康、设备、动作目录、批量动作/stop、循环对话、事件、设置和固件合同；无令牌或401时锁定mutation。
+- 后端：新增知乎官方只读Gateway/Service、受保护Web API和显式目标设备朗读。只允许`developer.zhihu.com`、单页白名单查询、2路并发、超时、2 MiB响应上限且不自动重试；非敏感画像可写SQLite，查询结果不持久化，事件只记工具/时间等元数据。
+- 密钥：`ZHIHU_ACCESS_SECRET`只从本机`.env`读取，状态仅公开是否配置。真实额度探针和一次最小热榜查询已成功，输出只含能力ID、计数和验证状态；精确密钥扫描未在源码、文档、构建产物或Git差异发现原值。由于凭据曾在对话中出现，正式发布前仍应轮换。
+- 静态交付：`npm ci --ignore-scripts && npm run build`完成TypeScript检查和41模块Vite构建，生成哈希JS/CSS、HTML、模型、图片和GIF到Python包；package data与GitHub矩阵增加递归静态资源PyInstaller smoke，生产仍只启动一个Python进程。
+- 本地门禁：`uv lock --check`、Ruff、mypy strict（41个源码文件）、全量`203 passed`、npm 0漏洞、前端禁用链扫描、源码静态资源smoke和PyInstaller onefile实跑均PASS。Runtime优雅关闭后8081/1883/8884全部释放；最终构建重启后Forge首页、哈希资源、健康、知乎401/授权状态和设备列表HTTP smoke通过，3台登记、2台在线，本轮未下发动作。
+- 返工：只读验收脚本先后使用了错误CI相对路径、错误前端源码层级、编译包API/设备状态字段及便携扫描工作目录；均未改动生产数据，已通过显式目录断言和真实HTTP字段重跑。Vite生成JS内Three.js GLSL模板的上游尾随空格触发Git误报，现只对该生成路径设置`-whitespace`，源码检查不放宽。旧遗留Runtime曾无法响应SIGTERM且内存异常，精确强制终止后SQLite完整性为`ok`；本轮新Runtime随后证明可正常SIGINT退出。
+- 文档：更新根目录GitHub `README.md`、后端README、ONBOARD、架构、施工计划、进度、模块状态、控制台要求和本Session Contract。远程commit、push及同一SHA的macOS/Windows CI在本地最终审计后执行并回填交付结果。

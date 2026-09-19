@@ -1,0 +1,30 @@
+body{background:#061345 url('/art/forge-companion.png') center bottom/cover fixed no-repeat}
+.assembly-app{background:#030b2259;min-height:100dvh}
+header{background:#061126b8;padding:0 14px;border-color:#508bc266;border-radius:0 0 12px 12px}
+.assembly-layout{grid-template-columns:minmax(0,1fr) 430px}
+.tower-frame{position:relative;aspect-ratio:2/3;width:min(100%,calc((100dvh - 128px)*2/3));height:auto;overflow:visible;align-self:center;justify-self:center}
+.tower-art{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;pointer-events:none;clip-path:polygon(13% 4%,83% 4%,90% 12%,90% 87%,83% 92%,80% 94%,16% 94%,13% 90%)}
+.tower-face{position:absolute;inset:9.3% 24% 12.4% 20.5%;overflow-y:auto;scrollbar-width:thin;scrollbar-color:#5a80a2 #0c1833;padding:3px}
+.laptop-art{clip-path:polygon(9.3% 2.3%,90.7% 2.3%,91% 69%,99% 89%,99% 95%,1% 95%,1% 89%,9% 69%)}
+.tower-face .tabs{position:sticky;top:0;padding:4px;gap:4px;border-radius:5px;z-index:3;background:#101d32;border:1px solid #597187}
+.tower-face button{border-radius:5px;border:1px solid #6787aa;border-bottom:3px solid #061229;box-shadow:inset 0 1px 0 #a6c7eb55;min-height:34px}
+.tower-face .tabs button{padding:7px 3px;font-size:12px;background:#27384f;color:#dceaff}
+.tower-face .tabs button.selected{background:#205fbd;border-color:#78c2ff;border-bottom-color:#09316c;box-shadow:inset 0 1px 0 #b7dbff,0 0 9px #199bff66;color:#fff}
+.tower-face .panel{padding:8px;border:0;background:#0c1833;box-shadow:none;border-radius:4px}
+.tower-face .panel h2{font-size:14px;margin-bottom:18px}
+#joint-controls{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;margin-bottom:16px}
+#joint-controls .range-field{margin:0;padding:0 0 12px;border-bottom:1px solid #395170;display:flex;flex-direction:column;align-items:center;gap:8px}
+#joint-controls .range-field>span{font-size:12px;line-height:1.6;text-align:center;display:flex;flex-direction:column;gap:8px;min-height:52px;margin:0}
+#joint-controls .range-field output{font-size:15px;color:#86daff;font-family:ui-monospace,monospace}
+#joint-controls input[type=range]{writing-mode:vertical-lr;direction:rtl;width:32px;height:165px;appearance:none;background:transparent;cursor:ns-resize;padding:0}
+#joint-controls input[type=range]::-webkit-slider-runnable-track{width:7px;background:#020711;border:1px solid #456183;border-radius:4px;box-shadow:inset 1px 0 2px #000}
+#joint-controls input[type=range]::-webkit-slider-thumb{appearance:none;width:29px;height:16px;margin-left:-12px;background:#cbd6e4;border:2px solid #f0f7ff;border-bottom:4px solid #7c91a8;border-radius:3px;box-shadow:0 2px 5px #000}
+#joint-controls input[type=range]::-moz-range-track{width:7px;background:#020711;border:1px solid #456183;border-radius:4px}
+#joint-controls input[type=range]::-moz-range-thumb{width:29px;height:16px;background:#cbd6e4;border:2px solid #f0f7ff;border-radius:3px}
+.tower-face .field{font-size:12px;gap:6px}.tower-face .field select{max-width:135px;font-size:12px;min-width:0}
+.tower-face .color-row{grid-template-columns:32px 30px minmax(0,1fr);gap:6px;font-size:12px}.tower-face .color-row input[type=color]{width:30px}.tower-face .color-row input[type=text]{font-size:12px;padding:7px 3px}
+.tower-face .action-grid button{font-size:12px}.tower-face .parameter-grid{gap:8px}.tower-face .checks{grid-template-columns:repeat(2,1fr)}
+.tower-face .field input[type=file]{width:175px}.tower-face .js-actions{flex-wrap:wrap}.tower-face textarea{font-size:12px}
+@media(min-width:1500px){.assembly-layout{grid-template-columns:minmax(0,1fr) 460px}}
+@media(max-width:1050px){.assembly-layout{grid-template-columns:minmax(0,1fr) 350px}}
+@media(max-width:900px){.assembly-layout{grid-template-columns:1fr;height:auto}.stage-card{height:auto;min-height:0}.laptop-frame{margin:0}.tower-frame{width:min(100%,460px);height:auto;aspect-ratio:2/3;margin:12px auto 24px}.tower-face .tabs{top:0}.assembly-app{min-height:100dvh}}

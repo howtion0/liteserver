@@ -6,6 +6,7 @@ on:
       - "test*"
     paths:
       - "otto-master/**"
+      - "webui/**"
       - ".github/workflows/otto-master-phase3.yml"
   workflow_dispatch:
 
@@ -29,6 +30,22 @@ jobs:
 
     steps:
       - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: webui/package-lock.json
+
+      - name: Rebuild Forge WebUI
+        working-directory: webui
+        run: |
+          npm ci --ignore-scripts
+          npm run build
+
+      - name: Verify committed WebUI snapshot
+        working-directory: .
+        run: git diff --exit-code -- otto-master/src/otto_master/web
 
       - uses: astral-sh/setup-uv@v7
         with:
@@ -83,3 +100,18 @@ jobs:
       - name: Run broker smoke executable (Windows)
         if: runner.os == 'Windows'
         run: ./dist-smoke/mqtt-broker-smoke.exe
+
+      - name: Build packaged WebUI smoke executable
+        run: >-
+          uv run pyinstaller --clean --noconfirm --onefile
+          --name static-assets-smoke --paths src --collect-data otto_master
+          --distpath dist-web-smoke --workpath build-web-smoke
+          tests/packaging/static_assets_smoke.py
+
+      - name: Run packaged WebUI smoke executable (macOS)
+        if: runner.os == 'macOS'
+        run: ./dist-web-smoke/static-assets-smoke
+
+      - name: Run packaged WebUI smoke executable (Windows)
+        if: runner.os == 'Windows'
+        run: ./dist-web-smoke/static-assets-smoke.exe

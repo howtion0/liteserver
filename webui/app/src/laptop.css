@@ -1,0 +1,13 @@
+.stage-card{background:transparent;border:0;border-radius:0;justify-content:center;overflow:visible;min-height:0}
+.laptop-frame{position:relative;aspect-ratio:3/2;width:min(100%,calc((100dvh - 245px)*1.5));margin:auto;flex-shrink:0}
+.laptop-art{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;pointer-events:none;user-select:none}
+.laptop-frame #assembly-viewport{position:absolute;left:11.5%;top:6.5%;width:77%;height:59%;min-height:0;overflow:hidden;border-radius:4px}
+.laptop-frame .stage-header{top:9%;left:14%;right:14%;font-size:11px;color:#abc4ea}
+.stage-toolbar{flex-shrink:0;padding:8px 4px}
+.stage-note{margin:4px 0 12px}
+.companion-banner{display:block;width:100%;height:114px;object-fit:cover;object-position:center;margin-bottom:12px;border:1px solid #315c9c;border-radius:12px;pointer-events:none}
+.panel{border-color:#315184;background:#0c1833;box-shadow:inset 0 1px 0 #31588c44}
+.tabs{border-color:#335c96;background:#0b1d42}
+.tabs button.selected{background:#264b9e;border-color:#62a9fa;color:#fff}
+@media(max-width:1050px){.laptop-frame{width:100%}.stage-card{min-height:0}.companion-banner{height:100px}}
+@media(max-width:600px){.laptop-frame .stage-header{font-size:9px}.stage-toolbar button{padding:7px;font-size:11px}.stage-note{font-size:10px}}

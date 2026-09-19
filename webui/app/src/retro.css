@@ -1,0 +1,26 @@
+/* Real illustration assets; interactive canvas and controls align to their faces. */
+.assembly-layout{grid-template-columns:minmax(0,1fr) 480px}
+.laptop-frame{aspect-ratio:4/3;width:min(100%,calc((100dvh - 235px)*4/3))}
+.laptop-art{clip-path:polygon(16.5% 3%,73% 2%,77% 5%,78% 13%,86% 17%,86% 48%,77% 58%,76% 63%,76% 76%,83% 76%,90% 92%,90% 97%,9.5% 97%,9.5% 92%,18% 76%,21% 76%,21% 68%,31% 62%,17% 60%,16% 56%)}
+.laptop-frame #assembly-viewport{left:22.6%;top:10.8%;width:44.9%;height:41.6%;border-radius:16px;background:#111318}
+.laptop-frame .stage-header{top:13.2%;left:24.5%;right:34.5%;font-size:10px;color:#b8bec8}
+.tower-frame{aspect-ratio:3/4;width:min(100%,calc((100dvh - 150px)*3/4))}
+.tower-art{clip-path:polygon(6% 18%,24% 12%,93% 12%,96% 16%,96% 76%,81% 86%,79% 89%,69% 89%,68% 87%,10% 87%,9% 86%,6% 83%)}
+.tower-face{inset:29.2% 25.1% 27.5% 10.8%;border-radius:14px;padding:8px;background:#111318;scrollbar-color:#a6a6a6 #111318}
+.tower-face .tabs{background:#17191d;border:0;border-radius:3px;margin-bottom:8px;padding:2px;gap:5px}
+.tower-face .tabs button,.tower-face button{background:#e5e3de;color:#161616;border:2px solid #060606;border-bottom:4px solid #5c5c5c;border-radius:5px;box-shadow:none;font-weight:650;min-height:30px;padding:5px 6px}
+.tower-face .tabs button.selected,.tower-face button.primary,.tower-face button.selected{background:#fff;color:#000;border-color:#8b8b8b;border-bottom-color:#efefef;box-shadow:inset 0 0 0 1px #fff}
+.tower-face button:hover{background:#fff;border-color:#9a9a9a}
+.tower-face #reset-colors,.tower-face #reset-assembly{background:#e5e3de;color:#161616;border-color:#737373}
+.tower-face .panel{background:#111318;padding:8px 4px;margin-bottom:0}
+.tower-face .panel h2{margin:4px 0 12px;font-size:13px}
+#joint-controls{gap:7px;margin-bottom:8px}#joint-controls .range-field>span{min-height:42px;gap:3px;font-size:12px}#joint-controls .range-field output{color:#fff;font-size:14px}
+#joint-controls input[type=range]{height:105px}#joint-controls .range-field{padding-bottom:6px;gap:3px}
+.tower-face .firmware-panel{padding-top:4px}.tower-face summary{color:#d8d8d8}.tower-face .hint{color:#a9a9a9}
+.tower-face input:not([type=color]):not([type=range]),.tower-face select,.tower-face textarea{background:#1f2126;border-color:#737373;color:#f2f2f2}
+.tower-face .range-field>span,.tower-face .parameter-grid label{color:#d4d4d4}.tower-face .panel p{color:#bfc0c4}
+.tower-face .field{margin:12px 0}.tower-face .color-wheel{margin:12px auto}
+@media(min-width:1500px){.assembly-layout{grid-template-columns:minmax(0,1fr) 500px}}
+@media(max-width:1100px){.assembly-layout{grid-template-columns:minmax(0,1fr) 380px}}
+@media(max-width:900px){.assembly-layout{grid-template-columns:1fr}.laptop-frame{width:100%}.tower-frame{width:min(100%,500px);margin:0 auto 20px}.laptop-frame .stage-header{font-size:9px}}
+@media(max-width:600px){.laptop-frame .stage-header{display:none}.tower-face{padding:4px}.tower-face .tabs button{font-size:11px;padding:5px 2px}.tower-face .panel{padding:4px 2px}#joint-controls input[type=range]{height:80px}#joint-controls .range-field>span{font-size:11px}#joint-controls{gap:3px}.tower-face .field select{max-width:120px}}

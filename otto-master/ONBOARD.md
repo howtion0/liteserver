@@ -5,10 +5,10 @@
 Otto Master 是一个 Python 编写的机器人集群主控。它在单个进程中统一承担：
 
 - ESP32 MQTT集群控制、TCP回退、WebSocket兼容与Opus音频接入
-- 云端 ASR、LLM、TTS
-- “你好 EVA1 → EVA1 在 → 用户下命令”的两阶段唤醒
+- 火山ASR/TTS、DeepSeek流式对话和受限机器人工具
+- 每轮约2秒本地笑声门禁、循环问答、8秒无讲话退出和按钮进出
 - 单机、分组和集群动作分发
-- WebUI、REST API、OTA 与 mDNS
+- Forge电台3D WebUI、REST API、OTA、mDNS和知乎官方只读查询
 - SQLite 本地持久化
 
 开发在 macOS 进行，主要部署目标为 Windows。
@@ -49,14 +49,15 @@ mDNS / OTA     ───┘                                  ├─ WakeGate
 | Phase 1 Runtime与Message Bus | 已完成 |
 | Phase 2 SQLite | 已完成 |
 | Phase 3 网络控制面 | 已完成；macOS/Windows CI与两平台PyInstaller smoke通过 |
-| Phase 4 MQTT与Device Session | 进行中；Phase 4A-4D已完成fake MQTT/TCP/WebSocket控制链，固件与EVA真机待验收 |
-| Python业务代码 | Phase 1-4D已实现；固件改造和云服务未接入 |
-| WebUI | P0状态/实时设备/事件/设置/OTA骨架已实现 |
+| Phase 4 MQTT与Device Session | 进行中；软件门禁、EVA1/EVA2双机和EVA1/EVA2/EVA3正式MQTT批量动作通过，WebSocket真机Profile待验收 |
+| Phase 5-7 语音/对话/工具 | 进行中；EVA1完整MQTT+UDP问答和工具闭环、EVA2单会话通过，多设备并发语音待验收 |
+| Python业务代码 | Runtime、设备、语音、Dispatcher、Forge控制台和知乎官方只读Gateway/Service已接入同一进程 |
+| WebUI | 源码位于仓库根`webui/`，Forge 3D界面已接真实健康、设备、命令、对话、设置、OTA和知乎API；生产使用Python包内构建快照 |
 | SQLite数据库 | 运行时自动创建并迁移 |
 | 固件文件 | 未放入 |
-| 测试 | 本机80个自动测试通过；Phase 4D macOS/Windows探针与PyInstaller smoke通过 |
+| 测试 | `test1.1`本机203项、Ruff、mypy、TypeScript/Vite、Runtime HTTP和PyInstaller静态资源smoke通过；本轮远程macOS/Windows CI待push后确认 |
 
-当前工程可同时启动本地控制面、Broker、MQTT Gateway、TCP Gateway、设备WebSocket、Device Manager和Dispatcher，并对fake/兼容设备执行只读连接验证、受保护动作/stop、命令状态查询和集群stop拆分。WebSocket v1音频帧只保存在有界短期内存并以引用传递。这些结果只来自fake设备和loopback网络；固件2.0.5的MQTT stop/去重改造与EVA真机验收尚未完成。
+当前工程由一个Python进程启动控制面、Broker、MQTT/UDP/TCP/设备WebSocket、Device Manager、Dispatcher、WakeGate、云端语音/LLM和知乎只读Service。EVA1/EVA2/EVA3均有2.0.16稳定身份和正式MQTT控制证据；`test1.1`不修改固件，也没有把设备在线状态冒充新的动作或并发语音验收。未完成项以`docs/DEV_PROGRESS.md`为准。
 
 ## 5. 文档索引
 
@@ -79,21 +80,21 @@ mDNS / OTA     ───┘                                  ├─ WakeGate
 | Server控制台与打包前验收 | `docs/SERVER_CONSOLE_REQUIREMENTS.md` |
 | 调试路线 | `docs/DEBUG_GUIDE.md` |
 
-## 6. 计划中的开发环境
+## 6. 开发环境
 
 ```powershell
-py -3.11 -m venv .venv
-.venv\Scripts\Activate.ps1
-python -m pip install -e ".[dev]"
+Copy-Item .env.example .env
+uv sync --all-extras --locked
+uv run python -m otto_master
 ```
 
 ```bash
-python3.11 -m venv .venv
-source .venv/bin/activate
-python -m pip install -e '.[dev]'
+cp .env.example .env
+uv sync --all-extras --locked
+uv run python -m otto_master
 ```
 
-当前可使用 `uv run --project . --extra dev ...` 执行全量测试和静态检查；后续阶段继续沿用 Python 3.11+ 环境。
+使用Python 3.11+。生产运行不需要Node；只在修改仓库根`../webui/`时运行`npm ci && npm run build`，构建快照写入`src/otto_master/web/`。
 
 ## 7. 每次施工前
 
